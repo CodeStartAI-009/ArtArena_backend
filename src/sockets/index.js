@@ -10,7 +10,10 @@ const rooms = new Map();
 module.exports = function setupSockets(server) {
   const io = new Server(server, {
     cors: {
-      origin: "https://art-arena-frontend.vercel.app",
+      origin:   [
+        "http://localhost:3000",
+        "https://art-arena-frontend.vercel.app",
+      ],
       credentials: true,
     },
   });
