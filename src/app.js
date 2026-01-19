@@ -20,7 +20,7 @@ const app = express();
 /* ✅ CORS — FRONTEND SAFE */
 app.use(
   cors({
-    origin: "http://localhost:3000",
+    origin: "https://art-arena-frontend.vercel.app/",
     credentials: true,
   })
 );

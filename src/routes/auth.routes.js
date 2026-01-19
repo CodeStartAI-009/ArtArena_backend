@@ -20,7 +20,7 @@ router.get(
   passport.authenticate("google", { session: false }),
   (req, res) => {
     res.redirect(
-      `http://localhost:3000/`
+      `https://art-arena-frontend.vercel.app/`
     );
   }
 );
