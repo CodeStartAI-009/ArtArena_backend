@@ -1,4 +1,5 @@
 const scheduleRoomCleanup = require("../utils/scheduleRoomCleanup");
+const emitGameState = require("../utils/emitGameState");
 const { applyRewards } = require("./rewardEngine");
 
 /* =========================
@@ -7,6 +8,30 @@ const { applyRewards } = require("./rewardEngine");
 function startGame(io, room) {
   if (!room) return;
 
+  if (room.mode === "Together") {
+    if (room.players.length !== 2) {
+      io.to(room.code).emit("FORCE_EXIT");
+      return;
+    }
+
+    room.players[0].side = "left";
+    room.players[1].side = "right";
+
+    room.status = "playing";
+
+    emitGameState(io, room); // 🔥 BEFORE UI unlock
+
+    io.to(room.code).emit("TOGETHER_STARTED", {
+      leftPlayerId: room.players[0].id,
+      rightPlayerId: room.players[1].id,
+    });
+
+    return;
+  }
+
+  /* =========================
+     NORMAL GAME START
+  ========================== */
   room.status = "playing";
   room.round = 1;
   room.drawerIndex = 0;
@@ -82,17 +107,15 @@ async function endGame(io, room, reason = "completed") {
   );
 
   /* =========================
-     APPLY REWARDS (DB + MEMORY)
+     APPLY REWARDS
   ========================== */
   const updatedUsers = [];
 
   for (const player of room.players) {
     try {
       const result = await applyRewards(player);
+      if (!result?.user) continue;
 
-      if (!result || !result.user) continue;
-
-      // 🔄 Sync room memory with DB
       player.xp = result.user.xp;
       player.level = result.user.level;
       player.coins = result.user.coins;
@@ -107,17 +130,14 @@ async function endGame(io, room, reason = "completed") {
       });
 
       console.log(
-        `🎁 Rewards → ${player.username}: +${result.xpEarned} XP, +${result.coinsEarned} coins (Lv ${player.level}, XP ${player.xp}/100)`
+        `🎁 Rewards → ${player.username}: +${result.xpEarned} XP, +${result.coinsEarned} coins`
       );
     } catch (err) {
       console.error(`❌ Reward failed for ${player.username}`, err);
     }
   }
 
-  /* 🔔 PUSH ECONOMY UPDATE (ROOM-SAFE) */
-  io.to(room.code).emit("USER_UPDATED", {
-    users: updatedUsers,
-  });
+  io.to(room.code).emit("USER_UPDATED", { users: updatedUsers });
 
   /* ---------- Freeze gameplay ---------- */
   room.guessingAllowed = false;
@@ -126,13 +146,12 @@ async function endGame(io, room, reason = "completed") {
   room.drawing = [];
   room.undoStack = [];
 
-  /* ---------- Init rematch ---------- */
+  /* ---------- Rematch ---------- */
   room.rematch = {
     active: true,
     votes: new Map(),
   };
 
-  /* ---------- Emit GAME_ENDED ---------- */
   io.to(room.code).emit("GAME_ENDED", {
     reason,
     winner: winner
@@ -159,12 +178,8 @@ async function endGame(io, room, reason = "completed") {
 
   io.to(room.code).emit("REMATCH_PROMPT");
 
-  /* ---------- Rematch safety ---------- */
   const connectedPlayers = room.players.filter(p => p.connected);
-
   if (connectedPlayers.length < 2) {
-    console.log("❌ Rematch cancelled: not enough players");
-
     room.rematch.active = false;
     io.to(room.code).emit("FORCE_EXIT");
 
@@ -201,7 +216,6 @@ function startRematch(io, room) {
     return;
   }
 
-  /* ---------- FULL RESET ---------- */
   room.status = "playing";
   room.round = 1;
   room.drawerIndex = 0;
