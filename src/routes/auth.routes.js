@@ -22,7 +22,7 @@ router.get(
     const token = req.user.token;
 
     res.redirect(
-      `http://localhost:3000/auth/success?token=${token}`
+      `https://art-arena-frontend.vercel.app/auth/success?token=${token}`
     );
   }
 );
