@@ -1,4 +1,5 @@
 // backend/src/sockets/index.js
+
 const { Server } = require("socket.io");
 
 const lobbySocket = require("./room.socket");
@@ -10,7 +11,7 @@ const rooms = new Map();
 module.exports = function setupSockets(server) {
   const io = new Server(server, {
     cors: {
-      origin:   [
+      origin: [
         "http://localhost:3000",
         "https://art-arena-frontend.vercel.app",
       ],
@@ -26,16 +27,18 @@ module.exports = function setupSockets(server) {
     /* =========================
        AUTH (REQUIRED)
     ========================== */
-    socket.on("AUTH", ({ userId, username }) => {
-      socket.userId = userId;
-      socket.username = username;
+    socket.on("AUTH", ({ userId }) => {
+      if (!userId) return;
     
-      console.log(`🔐 AUTH success → ${userId} (${username})`);
+      // ✅ store in BOTH places
+      socket.data.userId = String(userId);
+      socket.userId = String(userId); // fallback
     
-      socket.emit("AUTH_SUCCESS"); // 🔥 REQUIRED
+      console.log("🔐 AUTH success →", socket.data.userId);
+      socket.emit("AUTH_SUCCESS");
     });
     
-    
+
     /* =========================
        REGISTER SOCKET MODULES
     ========================== */

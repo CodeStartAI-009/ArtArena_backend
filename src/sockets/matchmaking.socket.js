@@ -2,18 +2,14 @@ const { nanoid } = require("nanoid");
 const Room = require("../models/Room");
 
 module.exports = (io, socket, rooms) => {
-
   socket.on("PLAY_PUBLIC", async () => {
-    // 🔍 Find existing public room that is joinable
-    let room = [...rooms.values()].find(r =>
-      r.type === "public" &&
-      r.mode === "Quick" &&
-      r.gameplay === "Timer" &&
-      r.status === "lobby" &&
-      r.players.length < r.maxPlayers
+    const userId = socket.data.userId;
+    if (!userId) return;
+
+    let room = [...rooms.values()].find(
+      r => r.type === "public" && r.status === "lobby"
     );
 
-    // 🏗️ Create new room if none found
     if (!room) {
       const code = nanoid(6).toUpperCase();
 
@@ -22,20 +18,11 @@ module.exports = (io, socket, rooms) => {
         type: "public",
         mode: "Quick",
         gameplay: "Timer",
-        timer: 30,
-        totalRounds: 5,
+        theme: "classic",
         maxPlayers: 12,
-        minPlayers: 4,
-
         status: "lobby",
+        hostId: null,
         players: [],
-        round: 0,
-        drawerIndex: 0,
-        guessingAllowed: false,
-
-        drawing: [],
-        undoStack: [],
-        rematch: null,
         __rooms: rooms,
       };
 
@@ -46,14 +33,15 @@ module.exports = (io, socket, rooms) => {
         type: "public",
         mode: "Quick",
         gameplay: "Timer",
-        timer: 30,
-        totalRounds: 5,
+        theme: "classic",
         maxPlayers: 12,
+        status: "lobby",
       });
 
-      console.log(`🌍 Public room created → ${code}`);
+      console.log(`🌍 PUBLIC ROOM CREATED → ${code}`);
     }
 
+    // 🔥 DO NOT TOUCH room.players HERE
     socket.emit("MATCH_FOUND", { code: room.code });
   });
 };
