@@ -1,18 +1,19 @@
 const User = require("../models/User");
 
-async function applyRewards(player) {
-  if (!player?.id) return null;
+/**
+ * Apply XP / coin reward for a correct guess
+ */
+async function applyRewards(userId, reward) {
+  if (!userId) return null;
 
-  const user = await User.findById(player.id);
+  const user = await User.findById(userId);
   if (!user) return null;
 
-  const score = player.score ?? 0;
+  const xp = reward?.xp ?? 0;
+  const coins = reward?.coins ?? 0;
 
-  const xpEarned = score * 10;
-  const coinsEarned = score * 5;
-
-  user.xp += xpEarned;
-  user.coins += coinsEarned;
+  user.xp += xp;
+  user.coins += coins;
 
   while (user.xp >= 100) {
     user.level += 1;
@@ -22,9 +23,9 @@ async function applyRewards(player) {
   await user.save();
 
   return {
-    user,          // ✅ THIS IS WHAT YOU WERE MISSING
-    xpEarned,
-    coinsEarned,
+    user,
+    xpEarned: xp,
+    coinsEarned: coins,
   };
 }
 

@@ -1,6 +1,5 @@
 const scheduleRoomCleanup = require("../utils/scheduleRoomCleanup");
 const emitGameState = require("../utils/emitGameState");
-const { applyRewards } = require("./rewardEngine");
 
 /* =========================
    START GAME
@@ -8,6 +7,9 @@ const { applyRewards } = require("./rewardEngine");
 function startGame(io, room) {
   if (!room) return;
 
+  /* =========================
+     TOGETHER MODE
+  ========================== */
   if (room.mode === "Together") {
     if (room.players.length !== 2) {
       io.to(room.code).emit("FORCE_EXIT");
@@ -16,10 +18,9 @@ function startGame(io, room) {
 
     room.players[0].side = "left";
     room.players[1].side = "right";
-
     room.status = "playing";
 
-    emitGameState(io, room); // 🔥 BEFORE UI unlock
+    emitGameState(io, room);
 
     io.to(room.code).emit("TOGETHER_STARTED", {
       leftPlayerId: room.players[0].id,
@@ -35,6 +36,7 @@ function startGame(io, room) {
   room.status = "playing";
   room.round = 1;
   room.drawerIndex = 0;
+  room.drawerId = null;
 
   room.players.forEach(p => {
     p.score = typeof p.score === "number" ? p.score : 0;
@@ -44,14 +46,13 @@ function startGame(io, room) {
 
   room.rematch = null;
 
-  console.log(`🎮 Game started for room ${room.code}`);
+  console.log(`🎮 Game started → ${room.code}`);
 
-  const { startRound } = require("./roundEngine");
-  startRound(io, room);
+  require("./roundEngine").startRound(io, room);
 }
 
 /* =========================
-   GAME END RULES (PURE)
+   GAME END RULES
 ========================= */
 function shouldEndGame(room) {
   if (!room || room.status !== "playing") return false;
@@ -59,18 +60,15 @@ function shouldEndGame(room) {
   // Together mode never auto-ends
   if (room.mode === "Together") return false;
 
-  // Score-based
-  if (
-    room.gameplay === "Score" &&
-    typeof room.maxScore === "number"
-  ) {
+  // ✅ SCORE LIMIT (Score + Timer)
+  if (typeof room.maxScore === "number") {
     if (room.players.some(p => p.score >= room.maxScore)) {
       console.log("🏁 End game: max score reached");
       return true;
     }
   }
 
-  // Round-based
+  // ✅ ROUND LIMIT
   if (
     typeof room.totalRounds === "number" &&
     room.round > room.totalRounds
@@ -83,9 +81,9 @@ function shouldEndGame(room) {
 }
 
 /* =========================
-   END GAME (AUTHORITATIVE)
+   END GAME
 ========================= */
-async function endGame(io, room, reason = "completed") {
+function endGame(io, room, reason = "completed") {
   if (!room || room.status === "ended") return;
 
   room.status = "ended";
@@ -103,41 +101,8 @@ async function endGame(io, room, reason = "completed") {
       : null;
 
   console.log(
-    `🏆 Game ended (${reason}) → Winner: ${winner?.username ?? "N/A"}`
+    `🏁 Game ended (${reason}) → Winner: ${winner?.username ?? "N/A"}`
   );
-
-  /* =========================
-     APPLY REWARDS
-  ========================== */
-  const updatedUsers = [];
-
-  for (const player of room.players) {
-    try {
-      const result = await applyRewards(player);
-      if (!result?.user) continue;
-
-      player.xp = result.user.xp;
-      player.level = result.user.level;
-      player.coins = result.user.coins;
-      player.gems = result.user.gems;
-
-      updatedUsers.push({
-        id: player.id,
-        xp: player.xp,
-        level: player.level,
-        coins: player.coins,
-        gems: player.gems,
-      });
-
-      console.log(
-        `🎁 Rewards → ${player.username}: +${result.xpEarned} XP, +${result.coinsEarned} coins`
-      );
-    } catch (err) {
-      console.error(`❌ Reward failed for ${player.username}`, err);
-    }
-  }
-
-  io.to(room.code).emit("USER_UPDATED", { users: updatedUsers });
 
   /* ---------- Freeze gameplay ---------- */
   room.guessingAllowed = false;
@@ -159,33 +124,22 @@ async function endGame(io, room, reason = "completed") {
           id: winner.id,
           username: winner.username,
           score: winner.score,
-          level: winner.level,
-          xp: winner.xp,
-          coins: winner.coins,
         }
       : null,
     players: room.players.map(p => ({
       id: p.id,
       username: p.username,
       score: p.score,
-      level: p.level,
-      xp: p.xp,
-      coins: p.coins,
-      gems: p.gems ?? 0,
       connected: p.connected !== false,
     })),
   });
 
   io.to(room.code).emit("REMATCH_PROMPT");
 
+  /* ---------- Auto cleanup ---------- */
   const connectedPlayers = room.players.filter(p => p.connected);
-  if (connectedPlayers.length < 2) {
-    room.rematch.active = false;
-    io.to(room.code).emit("FORCE_EXIT");
-
-    if (room.type === "private") {
-      scheduleRoomCleanup(room.code, room.__rooms);
-    }
+  if (connectedPlayers.length < 2 && room.type === "private") {
+    scheduleRoomCleanup(room.code, room.__rooms);
   }
 }
 
@@ -195,7 +149,7 @@ async function endGame(io, room, reason = "completed") {
 function startRematch(io, room) {
   if (!room?.rematch) return;
 
-  console.log(`🔁 Starting rematch for room ${room.code}`);
+  console.log(`🔁 Rematch starting → ${room.code}`);
 
   const playIds = new Set(
     [...room.rematch.votes.entries()]
@@ -235,12 +189,11 @@ function startRematch(io, room) {
 
   io.to(room.code).emit("REMATCH_STARTED");
 
-  const { startRound } = require("./roundEngine");
-  startRound(io, room);
+  require("./roundEngine").startRound(io, room);
 }
 
 /* =========================
-   EXPORTS
+   EXPORTS (SINGLE SOURCE)
 ========================= */
 module.exports = {
   startGame,

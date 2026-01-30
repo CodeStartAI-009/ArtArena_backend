@@ -1,3 +1,5 @@
+ // backend/src/controllers/room.controller.js
+
 const Room = require("../models/Room");
 const User = require("../models/User");
 
@@ -19,20 +21,29 @@ const generateCode = () =>
 const getRandomTheme = () =>
   THEMES[Math.floor(Math.random() * THEMES.length)];
 
-exports.createRoom = async (req, res) => {
+/* =========================
+   CREATE ROOM
+========================= */
+const createRoom = async (req, res) => {
   try {
     const userId = req.user._id;
-    const { theme, isPrivate, score, ...rest } = req.body;
 
-    const user = await User.findOneAndUpdate(
-      { _id: userId, coins: { $gte: ROOM_COST } },
-      { $inc: { coins: -ROOM_COST } },
-      { new: true }
-    );
+    const {
+      theme,
+      isPrivate,
+      score,
+      timer,
+      mode,
+      gameplay,
+      totalRounds,
+      maxPlayers,
+    } = req.body;
 
-    if (!user) {
-      return res.status(400).json({ message: "Not enough coins" });
-    }
+    /* ---------- ENSURE TIMER IS NUMBER ---------- */
+    const resolvedTimer =
+      gameplay === "Timer" && Number.isFinite(timer)
+        ? timer
+        : null;
 
     let code;
     while (true) {
@@ -49,42 +60,54 @@ exports.createRoom = async (req, res) => {
       code,
       theme: resolvedTheme,
       type: isPrivate ? "private" : "public",
+      mode,
+      gameplay,
+      timer: resolvedTimer, // ✅ NUMBER STORED
       maxScore: score ?? null,
-      ...rest,
+      totalRounds: totalRounds ?? null,
+      maxPlayers,
       status: "lobby",
     });
 
-    console.log(`🏗️ ROOM CREATED → ${room.code} (${room.type})`);
+    console.log("🏗️ ROOM CREATED", {
+      code: room.code,
+      type: room.type,
+      mode: room.mode,
+      gameplay: room.gameplay,
+      timer: room.timer, // ✅ number
+      maxScore: room.maxScore,
+      totalRounds: room.totalRounds,
+      maxPlayers: room.maxPlayers,
+    });
 
     res.status(201).json({ room });
   } catch (err) {
-    console.error("❌ CREATE ROOM ERROR:", err);
+    console.error("❌ CREATE ROOM ERROR", err);
     res.status(500).json({ message: "Failed to create room" });
   }
 };
 
-
-/* ================= GET ROOM ================= */
-exports.getRoom = async (req, res) => {
+/* =========================
+   GET ROOM
+========================= */
+const getRoom = async (req, res) => {
   try {
     const room = await Room.findOne({ code: req.params.code }).lean();
-
     if (!room) {
       return res.status(404).json({ message: "Room not found" });
     }
-
     res.json({ room });
   } catch (err) {
-    console.error("❌ GET ROOM ERROR:", err);
     res.status(500).json({ message: "Failed to fetch room" });
   }
 };
 
-/* ================= JOIN ROOM (PRIVATE ONLY) ================= */
-exports.joinRoom = async (req, res) => {
+/* =========================
+   JOIN ROOM
+========================= */
+const joinRoom = async (req, res) => {
   try {
     const room = await Room.findOne({ code: req.params.code });
-
     if (!room) {
       return res.status(404).json({ message: "Room not found" });
     }
@@ -99,14 +122,14 @@ exports.joinRoom = async (req, res) => {
       return res.status(400).json({ message: "Game already started" });
     }
 
-    if (room.maxPlayers && room.maxPlayers <= 0) {
-      return res.status(400).json({ message: "Room is full" });
-    }
-
-    // 🔥 Do NOT add players here — socket handles it
     res.json({ room });
   } catch (err) {
-    console.error("❌ JOIN ROOM ERROR:", err);
     res.status(500).json({ message: "Failed to join room" });
   }
+};
+
+module.exports = {
+  createRoom,
+  getRoom,
+  joinRoom,
 };
