@@ -13,12 +13,11 @@ const GUESS_REWARD = { xp: 10, coins: 10 };
 module.exports = (io, socket, rooms) => {
 
   /* =========================
-     START GAME (HOST)
+     START GAME
   ========================== */
   socket.on("START_GAME", ({ code }) => {
     const room = rooms.get(code);
-    if (!room) return;
-    if (room.status !== "lobby") return;
+    if (!room || room.status !== "lobby") return;
     if (room.players.length < 2) return;
 
     room.status = "starting";
@@ -26,15 +25,13 @@ module.exports = (io, socket, rooms) => {
 
     setTimeout(() => {
       if (room.status !== "starting") return;
-
       gameEngine.startGame(io, room);
       io.to(code).emit("GAME_STARTED", { code });
-      emitGameState(io, room);
     }, 3000);
   });
 
   /* =========================
-     GAME JOIN / RECONNECT
+     GAME JOIN
   ========================== */
   socket.on("GAME_JOIN", ({ code, userId }) => {
     const room = rooms.get(code);
@@ -43,10 +40,7 @@ module.exports = (io, socket, rooms) => {
     socket.userId = userId;
     socket.join(code);
 
-    const player = room.players.find(
-      p => String(p.id) === String(userId)
-    );
-
+    const player = room.players.find(p => String(p.id) === String(userId));
     if (player) {
       player.connected = true;
       player.socketId = socket.id;
@@ -60,11 +54,11 @@ module.exports = (io, socket, rooms) => {
   });
 
   /* =========================
-     WORD SELECTION (DRAWER)
+     WORD SELECTED
   ========================== */
   socket.on("SELECT_WORD", ({ code, word }) => {
     const room = rooms.get(code);
-    if (!room) return;
+    if (!room || room.turnEnded) return;
     if (String(room.drawerId) !== String(socket.userId)) return;
     if (!room.wordChoices?.includes(word)) return;
 
@@ -72,27 +66,8 @@ module.exports = (io, socket, rooms) => {
     room.wordChoices = null;
     room.revealedLetters = [];
 
-    io.to(code).emit("WORD_SELECTED", {
-      wordLength: word.length,
-    });
-
-    emitGameState(io, room);
-
-    // 🔑 start timers + reveal system correctly
+    io.to(code).emit("WORD_SELECTED", { wordLength: word.length });
     roundEngine.onWordSelected(io, room);
-  });
-
-  /* =========================
-     ✅ MANUAL ALLOW GUESSING (DRAWER)
-  ========================== */
-  socket.on("ALLOW_GUESSING", ({ code }) => {
-    const room = rooms.get(code);
-    if (!room) return;
-    if (room.status !== "playing") return;
-    if (String(room.drawerId) !== String(socket.userId)) return;
-
-    // 🔑 delegate to round engine ONLY
-    roundEngine.allowGuessing(io, room);
   });
 
   /* =========================
@@ -100,15 +75,16 @@ module.exports = (io, socket, rooms) => {
   ========================== */
   socket.on("GUESS", async ({ code, guess }) => {
     const room = rooms.get(code);
-    if (!room || room.status !== "playing") return;
+    if (!room || room.turnEnded) return;
     if (!room.guessingAllowed || !room.currentWord) return;
 
     const playerId = socket.userId;
+    if (!playerId) return;
+
+    /* 🚫 Drawer cannot guess */
     if (String(room.drawerId) === String(playerId)) return;
 
-    const player = room.players.find(
-      p => String(p.id) === String(playerId)
-    );
+    const player = room.players.find(p => String(p.id) === String(playerId));
     if (!player || player.guessedCorrectly) return;
 
     const normalized = guess?.trim().toLowerCase();
@@ -117,7 +93,11 @@ module.exports = (io, socket, rooms) => {
     const correct =
       normalized === room.currentWord.toLowerCase();
 
-    // 🔑 round engine decides turn end
+    /* 🔑 CRITICAL FIX */
+    if (correct) {
+      player.guessedCorrectly = true;   // ✅ FIX
+    }
+
     roundEngine.onAnyGuess(io, room, playerId, correct);
 
     if (!correct) {
@@ -128,12 +108,13 @@ module.exports = (io, socket, rooms) => {
       return;
     }
 
-    if (!scoringEngine.awardScore(room, playerId)) return;
+    /* ---------- SCORE ---------- */
+    const scored = scoringEngine.awardScore(room, playerId);
+    if (!scored) return;
 
-    /* 🎁 PER-GUESS REWARD */
+    /* ---------- REWARDS ---------- */
     try {
       const result = await applyRewards(playerId, GUESS_REWARD);
-
       if (result?.user) {
         io.to(code).emit("USER_UPDATED", {
           users: [{
@@ -154,77 +135,7 @@ module.exports = (io, socket, rooms) => {
       username: player.username,
     });
 
-    emitGameState(io, room);
-  });
-
-  /* =========================
-     🌍 PUBLIC MATCHMAKING
-  ========================== */
-  socket.on("PLAY_PUBLIC", async () => {
-    if (!socket.userId) return;
-
-    const dbUser = await User.findById(socket.userId).lean();
-    if (!dbUser) return;
-
-    let room = [...rooms.values()].find(r =>
-      r.type === "public" &&
-      r.status === "lobby" &&
-      r.mode === "Quick" &&
-      r.gameplay === "Timer" &&
-      r.players.length < r.maxPlayers
-    );
-
-    if (!room) {
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-
-      room = {
-        code,
-        type: "public",
-        mode: "Quick",
-        gameplay: "Timer",
-        theme: "classic",
-        maxPlayers: 12,
-        totalRounds: 5,
-        timer: 30,
-        status: "lobby",
-        hostId: socket.userId,
-        players: [],
-        round: 0,
-        drawerIndex: 0,
-        drawerId: null,
-        guessingAllowed: false,
-        drawing: [],
-        undoStack: [],
-        rematch: null,
-        __rooms: rooms,
-      };
-
-      rooms.set(code);
-      console.log(`🌍 PUBLIC ROOM CREATED → ${code}`);
-    }
-
-    let player = room.players.find(
-      p => String(p.id) === String(socket.userId)
-    );
-
-    if (!player) {
-      player = {
-        id: socket.userId,
-        username: dbUser.username,
-        socketId: socket.id,
-        connected: true,
-        score: 0,
-      };
-      room.players.push(player);
-    } else {
-      player.connected = true;
-      player.socketId = socket.id;
-    }
-
-    socket.join(room.code);
-    socket.emit("MATCH_FOUND", { code: room.code });
-
-    emitGameState(io, room);
+    emitGameState(io, room); // ✅ force sync immediately
   });
 
   /* =========================
@@ -249,6 +160,8 @@ module.exports = (io, socket, rooms) => {
 
   socket.on("disconnect", () => {
     rooms.forEach(room => {
+      if (!room) return;
+
       const player = room.players.find(p => p.socketId === socket.id);
       if (!player) return;
 
