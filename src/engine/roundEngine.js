@@ -1,5 +1,3 @@
- // backend/src/engine/roundEngine.js
-
 const { pickRandomWords } = require("./wordEngine");
 const emitGameState = require("../utils/emitGameState");
 const gameEngine = require("./gameEngine");
@@ -13,16 +11,19 @@ function startRound(io, room) {
   /* ---------- HARD RESET ---------- */
   room.guessingAllowed = false;
   room.currentWord = null;
-  room.revealedLetters = [];
+  room.revealedLetters = []; // [{ index, letter }]
   room.correctGuessers = new Set();
   room.totalGuesses = 0;
   room.drawStartedAt = null;
   room.turnEnded = false;
+  room.revealsDone = 0;
 
   room.drawing = [];
   room.undoStack = [];
 
-  room.players.forEach(p => (p.guessedCorrectly = false));
+  room.players.forEach(p => {
+    p.guessedCorrectly = false;
+  });
 
   clearAllRoundTimers(room);
 
@@ -119,8 +120,8 @@ function onAnyGuess(io, room, userId, correct) {
   if (correct) {
     room.correctGuessers.add(userId);
 
-    const needed = room.players.length - 1; // exclude drawer
-    if (room.correctGuessers.size >= needed) {
+    const required = room.players.length - 1; // exclude drawer
+    if (room.correctGuessers.size >= required) {
       console.log("🎯 All players guessed correctly → ending turn");
       endTurn(io, room);
       return;
@@ -173,11 +174,15 @@ function setupRevealAndEndTimers(io, room) {
   const step = total / 3;
 
   room.revealTimer1 = setTimeout(() => {
-    if (!room.turnEnded) revealHint(io, room);
+    if (!room.turnEnded && room.revealsDone === 0) {
+      revealHint(io, room);
+    }
   }, step);
 
   room.revealTimer2 = setTimeout(() => {
-    if (!room.turnEnded) revealHint(io, room);
+    if (!room.turnEnded && room.revealsDone === 1) {
+      revealHint(io, room);
+    }
   }, step * 2);
 
   /* ---------- ONLY THIS ENDS TURN BY TIME ---------- */
@@ -194,20 +199,26 @@ function setupRevealAndEndTimers(io, room) {
 ========================= */
 function revealHint(io, room) {
   if (!room.currentWord) return;
+  if (room.revealsDone >= 2) return;
 
   const hidden = [];
   for (let i = 0; i < room.currentWord.length; i++) {
-    if (!room.revealedLetters.includes(i)) hidden.push(i);
+    if (!room.revealedLetters.some(r => r.index === i)) {
+      hidden.push(i);
+    }
   }
 
   if (!hidden.length) return;
 
   const index = hidden[Math.floor(Math.random() * hidden.length)];
-  room.revealedLetters.push(index);
+  const letter = room.currentWord[index];
+
+  room.revealedLetters.push({ index, letter });
+  room.revealsDone++;
 
   io.to(room.code).emit("HINT_REVEALED", {
     index,
-    letter: room.currentWord[index],
+    letter,
   });
 
   emitGameState(io, room);
