@@ -1,4 +1,4 @@
- // backend/src/engine/roundEngine.js
+// backend/src/engine/roundEngine.js
 
 const { pickRandomWords } = require("./wordEngine");
 const emitGameState = require("../utils/emitGameState");
@@ -17,6 +17,12 @@ function getSafeDuration(room, fallback = 30_000) {
 ========================= */
 function startRound(io, room) {
   if (!room || room.status !== "playing") return;
+
+  console.log("🟢 START ROUND", {
+    room: room.code,
+    round: room.round,
+    mode: room.mode,
+  });
 
   room.phase = room.mode === "Quick" ? "draw" : "live";
   room.guessingAllowed = false;
@@ -38,9 +44,8 @@ function startRound(io, room) {
   room.wordChoices = pickRandomWords(room.mode, 3);
 
   room.wordSelectTimer = setTimeout(() => {
-    if (!room.currentWord && !room.turnEnded) {
-      endTurn(io, room);
-    }
+    console.log("⏱️ WORD NOT SELECTED → END TURN");
+    endTurn(io, room);
   }, 10_000);
 
   io.to(room.code).emit("ROUND_START", {
@@ -78,19 +83,21 @@ function onWordSelected(io, room) {
    CLASSIC MODE
 ========================= */
 function startClassicPhase(io, room) {
-  const duration = getSafeDuration(room);
+  console.log("🎨 CLASSIC PHASE");
 
   room.noDrawTimer = setTimeout(() => {
     if (!room.hasDrawn && !room.turnEnded) {
+      console.log("❌ CLASSIC: NO DRAW 15s");
       endTurn(io, room);
     }
   }, 15_000);
 
   room.drawIdleTimer = setTimeout(() => {
+    console.log("✏️ CLASSIC: AUTO GUESS");
     allowGuessing(io, room);
   }, 5_000);
 
-  startRevealAndEndTimers(io, room, duration);
+  startRevealAndEndTimers(io, room, getSafeDuration(room));
 }
 
 /* =========================
@@ -101,18 +108,18 @@ function startQuickDrawPhase(io, room) {
 
   const duration = getSafeDuration(room);
 
+  console.log("⚡ QUICK DRAW PHASE", duration);
+
   room.phase = "draw";
   room.guessingAllowed = false;
   room.hasDrawn = false;
 
   room.drawPhaseTimer = setTimeout(() => {
-    if (room.turnEnded) return;
-
     if (!room.hasDrawn) {
+      console.log("❌ QUICK: NO DRAW");
       endTurn(io, room);
       return;
     }
-
     startQuickGuessPhase(io, room);
   }, duration);
 }
@@ -123,7 +130,7 @@ function startQuickDrawPhase(io, room) {
 function startQuickGuessPhase(io, room) {
   clearAllRoundTimers(room);
 
-  const duration = getSafeDuration(room);
+  console.log("🧠 QUICK GUESS PHASE");
 
   room.phase = "guess";
   room.guessingAllowed = true;
@@ -131,14 +138,14 @@ function startQuickGuessPhase(io, room) {
   io.to(room.code).emit("GUESSING_STARTED");
   emitGameState(io, room);
 
-  startRevealAndEndTimers(io, room, duration);
+  startRevealAndEndTimers(io, room, getSafeDuration(room));
 }
 
 /* =========================
    DRAW TRACKING
 ========================= */
 function onDrawerDraw(io, room) {
-  if (!room || room.turnEnded) return;
+  if (room.turnEnded) return;
 
   room.hasDrawn = true;
 
@@ -151,13 +158,55 @@ function onDrawerDraw(io, room) {
 }
 
 /* =========================
-   ALLOW GUESSING
+   ✅ MANUAL + AUTO ALLOW GUESSING
+========================= */
+ /* =========================
+   ALLOW GUESSING (MANUAL + AUTO)
 ========================= */
 function allowGuessing(io, room) {
-  if (room.guessingAllowed || room.turnEnded) return;
+  if (!room || room.turnEnded || room.guessingAllowed) return;
+
+  console.log("🟢 ALLOW GUESSING TRIGGERED", {
+    room: room.code,
+    mode: room.mode,
+    phase: room.phase,
+    hasDrawn: room.hasDrawn,
+  });
+
+  /* =========================
+     QUICK MODE
+  ========================= */
+  if (room.mode === "Quick") {
+    // ❌ Still in draw phase and never drew
+    if (room.phase === "draw" && !room.hasDrawn) {
+      console.log("❌ QUICK: NO DRAW → END TURN");
+      endTurn(io, room);
+      return;
+    }
+
+    // ✅ Transition draw → guess
+    if (room.phase === "draw") {
+      console.log("➡️ QUICK: DRAW → GUESS (MANUAL)");
+      startQuickGuessPhase(io, room);
+      return;
+    }
+
+    // Already guessing → ignore
+    return;
+  }
+
+  /* =========================
+     CLASSIC MODE
+  ========================= */
+  console.log("➡️ CLASSIC: GUESSING ENABLED");
+
+  // stop idle timers so turn doesn't auto-end
+  clearTimeout(room.drawIdleTimer);
+  clearTimeout(room.noDrawTimer);
 
   room.guessingAllowed = true;
   io.to(room.code).emit("GUESSING_STARTED");
+
   emitGameState(io, room);
 }
 
@@ -185,7 +234,7 @@ function startRevealAndEndTimers(io, room, duration) {
   room.revealTimer2 = setTimeout(() => revealHint(io, room), step * 2);
 
   room.endTimer = setTimeout(() => {
-    if (!room.turnEnded) endTurn(io, room);
+    endTurn(io, room);
   }, duration);
 }
 
@@ -217,6 +266,8 @@ function revealHint(io, room) {
 ========================= */
 function endTurn(io, room) {
   if (room.turnEnded) return;
+
+  console.log("🔚 TURN END", room.code);
 
   room.turnEnded = true;
   clearAllRoundTimers(room);
