@@ -13,7 +13,8 @@ const THEMES = [
   "volcano",
 ];
 
-const ROOM_COST = 50;
+const ROOM_CREATE_COST = 50;
+const ROOM_JOIN_COST = 25;
 
 const generateCode = () =>
   Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -22,12 +23,11 @@ const getRandomTheme = () =>
   THEMES[Math.floor(Math.random() * THEMES.length)];
 
 /* =========================
-   CREATE ROOM
+   CREATE ROOM  (-50 COINS)
 ========================= */
 const createRoom = async (req, res) => {
   try {
     const userId = req.user._id;
-
     const {
       theme,
       isPrivate,
@@ -39,7 +39,20 @@ const createRoom = async (req, res) => {
       maxPlayers,
     } = req.body;
 
-    /* ---------- ENSURE TIMER IS NUMBER ---------- */
+    /* ---------- DEDUCT COINS ---------- */
+    const user = await User.findOneAndUpdate(
+      { _id: userId, coins: { $gte: ROOM_CREATE_COST } },
+      { $inc: { coins: -ROOM_CREATE_COST } },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(400).json({
+        message: "Not enough coins to create a room",
+      });
+    }
+
+    /* ---------- TIMER NORMALIZATION ---------- */
     const resolvedTimer =
       gameplay === "Timer" && Number.isFinite(timer)
         ? timer
@@ -62,25 +75,24 @@ const createRoom = async (req, res) => {
       type: isPrivate ? "private" : "public",
       mode,
       gameplay,
-      timer: resolvedTimer, // ✅ NUMBER STORED
+      timer: resolvedTimer,
       maxScore: score ?? null,
       totalRounds: totalRounds ?? null,
       maxPlayers,
       status: "lobby",
+      createdBy: userId,
     });
 
-    console.log("🏗️ ROOM CREATED", {
+    console.log("🏗️ ROOM CREATED (-50 coins)", {
       code: room.code,
-      type: room.type,
-      mode: room.mode,
-      gameplay: room.gameplay,
-      timer: room.timer, // ✅ number
-      maxScore: room.maxScore,
-      totalRounds: room.totalRounds,
-      maxPlayers: room.maxPlayers,
+      createdBy: user.username,
+      coinsLeft: user.coins,
     });
 
-    res.status(201).json({ room });
+    res.status(201).json({
+      room,
+      coins: user.coins,
+    });
   } catch (err) {
     console.error("❌ CREATE ROOM ERROR", err);
     res.status(500).json({ message: "Failed to create room" });
@@ -103,11 +115,14 @@ const getRoom = async (req, res) => {
 };
 
 /* =========================
-   JOIN ROOM
+   JOIN ROOM (-25 COINS)
 ========================= */
 const joinRoom = async (req, res) => {
   try {
-    const room = await Room.findOne({ code: req.params.code });
+    const code = req.params.code.toUpperCase();
+    const userId = req.user._id;
+
+    const room = await Room.findOne({ code });
     if (!room) {
       return res.status(404).json({ message: "Room not found" });
     }
@@ -119,11 +134,36 @@ const joinRoom = async (req, res) => {
     }
 
     if (room.status !== "lobby") {
-      return res.status(400).json({ message: "Game already started" });
+      return res.status(400).json({
+        message: "Game already started",
+      });
     }
 
-    res.json({ room });
+    /* ---------- DEDUCT JOIN COINS ---------- */
+    const user = await User.findOneAndUpdate(
+      { _id: userId, coins: { $gte: ROOM_JOIN_COST } },
+      { $inc: { coins: -ROOM_JOIN_COST } },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(400).json({
+        message: "Not enough coins to join the room",
+      });
+    }
+
+    console.log("🚪 ROOM JOINED (-25 coins)", {
+      roomCode: code,
+      username: user.username,
+      coinsLeft: user.coins,
+    });
+
+    res.json({
+      room,
+      coins: user.coins,
+    });
   } catch (err) {
+    console.error("❌ JOIN ROOM ERROR", err);
     res.status(500).json({ message: "Failed to join room" });
   }
 };
