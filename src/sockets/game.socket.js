@@ -10,9 +10,10 @@ const User = require("../models/User");
 
 const GUESS_REWARD = { xp: 10, coins: 10 };
 
-/* =========================
-   THEMES
-========================== */
+const AUTO_START_PLAYERS = 4;
+const MANUAL_START_DELAY = 2 * 60 * 1000;
+const MAX_PLAYERS = 12;
+
 const THEMES = [
   "classic",
   "forest",
@@ -23,18 +24,56 @@ const THEMES = [
   "volcano",
 ];
 
-function getRandomTheme() {
-  return THEMES[Math.floor(Math.random() * THEMES.length)];
+const getRandomTheme = () =>
+  THEMES[Math.floor(Math.random() * THEMES.length)];
+
+/* =========================
+   PUBLIC START CONTROL
+========================= */
+function tryPublicStart(io, room) {
+  if (!room || room.type !== "public") return;
+  if (room.status !== "lobby") return;
+
+  if (room.players.length >= AUTO_START_PLAYERS) {
+    startPublicGame(io, room);
+    return;
+  }
+
+  if (!room.manualStartTimer) {
+    room.manualStartTimer = setTimeout(() => {
+      if (room.status !== "lobby") return;
+      if (room.players.length >= 2) {
+        startPublicGame(io, room);
+      }
+    }, MANUAL_START_DELAY);
+  }
+}
+
+function startPublicGame(io, room) {
+  if (room.status !== "lobby") return;
+
+  room.status = "starting";
+  clearTimeout(room.manualStartTimer);
+  room.manualStartTimer = null;
+
+  io.to(room.code).emit("GAME_STARTING");
+
+  setTimeout(() => {
+    if (room.status !== "starting") return;
+    gameEngine.startGame(io, room);
+    io.to(room.code).emit("GAME_STARTED", { code: room.code });
+  }, 2000);
 }
 
 module.exports = (io, socket, rooms) => {
 
   /* =========================
-     START GAME
+     START GAME (PRIVATE)
   ========================== */
   socket.on("START_GAME", ({ code }) => {
     const room = rooms.get(code);
-    if (!room || room.status !== "lobby") return;
+    if (!room || room.type !== "private") return;
+    if (room.status !== "lobby") return;
     if (room.players.length < 2) return;
 
     room.status = "starting";
@@ -57,10 +96,7 @@ module.exports = (io, socket, rooms) => {
     socket.userId = userId;
     socket.join(code);
 
-    const player = room.players.find(
-      p => String(p.id) === String(userId)
-    );
-
+    const player = room.players.find(p => String(p.id) === String(userId));
     if (player) {
       player.connected = true;
       player.socketId = socket.id;
@@ -82,16 +118,12 @@ module.exports = (io, socket, rooms) => {
     if (String(room.drawerId) !== String(socket.userId)) return;
     if (!room.wordChoices?.includes(word)) return;
 
-    room.currentWord = word;
-    room.wordChoices = null;
-    room.revealedLetters = [];
-
     io.to(code).emit("WORD_SELECTED", { wordLength: word.length });
-    roundEngine.onWordSelected(io, room);
+    roundEngine.onWordSelected(io, room, socket.userId, word);
   });
 
   /* =========================
-     GUESS
+     GUESS (✅ FIXED SCORING)
   ========================== */
   socket.on("GUESS", async ({ code, guess }) => {
     const room = rooms.get(code);
@@ -99,37 +131,24 @@ module.exports = (io, socket, rooms) => {
     if (!room.guessingAllowed || !room.currentWord) return;
 
     const playerId = socket.userId;
-    if (!playerId) return;
+    if (!playerId || String(room.drawerId) === String(playerId)) return;
 
-    if (String(room.drawerId) === String(playerId)) return;
-
-    const player = room.players.find(
-      p => String(p.id) === String(playerId)
-    );
+    const player = room.players.find(p => String(p.id) === String(playerId));
     if (!player || player.guessedCorrectly) return;
 
     const normalized = guess?.trim().toLowerCase();
     if (!normalized) return;
 
-    const correct =
-      normalized === room.currentWord.toLowerCase();
-
-    if (correct) {
-      player.guessedCorrectly = true;
-    }
-
-    roundEngine.onAnyGuess(io, room, playerId, correct);
-
-    if (!correct) {
-      io.to(code).emit("WRONG_GUESS", {
-        userId: playerId,
-        guess: normalized,
-      });
+    if (normalized !== room.currentWord.toLowerCase()) {
+      io.to(code).emit("WRONG_GUESS", { userId: playerId, guess: normalized });
       return;
     }
 
-    const scored = scoringEngine.awardScore(room, playerId);
-    if (!scored) return;
+    /* ✅ SCORE FIRST */
+    scoringEngine.awardScore(room, playerId);
+
+    /* ✅ THEN LOCK PLAYER */
+    player.guessedCorrectly = true;
 
     try {
       const result = await applyRewards(playerId, GUESS_REWARD);
@@ -153,40 +172,10 @@ module.exports = (io, socket, rooms) => {
       username: player.username,
     });
 
+    roundEngine.onAnyGuess(io, room, playerId, true);
     emitGameState(io, room);
   });
-
-  /* =========================
-     EXIT / DISCONNECT
-  ========================== */
-  socket.on("GAME_EXIT", ({ code }) => {
-    const room = rooms.get(code);
-    if (!room) return;
-
-    const player = room.players.find(
-      p => p.id === socket.userId
-    );
-    if (player) player.connected = false;
-
-    emitGameState(io, room);
-
-    if (
-      room.type === "private" &&
-      room.players.every(p => !p.connected)
-    ) {
-      scheduleRoomCleanup(room.code, rooms);
-    }
-  });
-
-  socket.on("ALLOW_GUESSING", ({ code }) => {
-    const room = rooms.get(code);
-    if (!room || room.turnEnded) return;
-    if (room.status !== "playing") return;
-    if (String(room.drawerId) !== String(socket.userId)) return;
-
-    roundEngine.allowGuessing(io, room);
-  });
-
+  socket.on("ALLOW_GUESSING", ({ code }) => { const room = rooms.get(code); if (!room || room.turnEnded) return; if (String(room.drawerId) !== String(socket.userId)) return; roundEngine.allowGuessing(io, room); });
   /* =========================
      PUBLIC MATCHMAKING
   ========================== */
@@ -197,60 +186,34 @@ module.exports = (io, socket, rooms) => {
     if (!dbUser) return;
 
     let room = [...rooms.values()].find(r =>
-      r &&
-      r.type === "public" &&
+      r?.type === "public" &&
       r.status === "lobby" &&
-      r.mode === "Quick" &&
-      r.gameplay === "Timer" &&
-      r.players.length < r.maxPlayers
+      r.players.length < MAX_PLAYERS
     );
 
     if (!room) {
-      const code = Math.random()
-        .toString(36)
-        .substring(2, 8)
-        .toUpperCase();
-
+      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
       room = {
         code,
         type: "public",
         mode: "Quick",
         gameplay: "Timer",
-
-        // 🎨 RANDOM THEME (FIXED)
         theme: getRandomTheme(),
-
-        maxPlayers: 12,
+        maxPlayers: MAX_PLAYERS,
         totalRounds: 5,
         timer: 30,
         status: "lobby",
-        hostId: socket.userId,
-
         players: [],
         round: 0,
         drawerIndex: 0,
-        drawerId: null,
-        guessingAllowed: false,
-        drawing: [],
-        undoStack: [],
-        correctGuessers: new Set(),
-        revealedLetters: [],
-        turnEnded: false,
-        hasDrawn: false,
-        revealsDone: 0,
-        phase: "draw",
-
+        manualStartTimer: null,
         __rooms: rooms,
       };
-
       rooms.set(code, room);
       console.log(`🌍 PUBLIC ROOM CREATED → ${code}`);
     }
 
-    let player = room.players.find(
-      p => String(p.id) === String(socket.userId)
-    );
-
+    let player = room.players.find(p => String(p.id) === String(socket.userId));
     if (!player) {
       player = {
         id: socket.userId,
@@ -267,26 +230,23 @@ module.exports = (io, socket, rooms) => {
 
     socket.join(room.code);
     socket.emit("MATCH_FOUND", { code: room.code });
-
     emitGameState(io, room);
+
+    tryPublicStart(io, room);
   });
 
+  /* =========================
+     DISCONNECT
+  ========================== */
   socket.on("disconnect", () => {
     rooms.forEach(room => {
-      if (!room) return;
-
-      const player = room.players.find(
-        p => p.socketId === socket.id
-      );
+      const player = room.players.find(p => p.socketId === socket.id);
       if (!player) return;
 
       player.connected = false;
       emitGameState(io, room);
 
-      if (
-        room.type === "private" &&
-        room.players.every(p => !p.connected)
-      ) {
+      if (room.type === "private" && room.players.every(p => !p.connected)) {
         scheduleRoomCleanup(room.code, rooms);
       }
     });
