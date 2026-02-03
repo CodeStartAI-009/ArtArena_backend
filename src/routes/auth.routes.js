@@ -22,7 +22,7 @@ router.get(
     const token = req.user.token;
 
     res.redirect(
-      `https://art-arena-frontend.vercel.app/auth/success?token=${token}`
+      `https://artarena.io/auth/success?token=${token}`
     );
   }
 );
