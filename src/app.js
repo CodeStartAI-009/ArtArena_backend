@@ -22,7 +22,7 @@ app.use(
   cors({
     origin:    [
       "http://localhost:3000",
-      "https://art-arena-frontend.vercel.app",
+      "https://artarena.io",
     ],
     credentials: true,
   })
