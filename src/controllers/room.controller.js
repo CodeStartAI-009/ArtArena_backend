@@ -13,7 +13,7 @@ const THEMES = [
   "volcano",
 ];
 
-const ROOM_CREATE_COST = 50;
+const ROOM_CREATE_COST = 10;
 const ROOM_JOIN_COST = 25;
 
 const generateCode = () =>

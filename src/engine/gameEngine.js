@@ -60,25 +60,40 @@ function shouldEndGame(room) {
   // Together mode never auto-ends
   if (room.mode === "Together") return false;
 
-  // ✅ SCORE LIMIT (Score + Timer)
+  const playersCount = room.players.length;
+
+  /**
+   * A round is considered COMPLETE only when
+   * drawerIndex is back to 0 (everyone drew once)
+   */
+  const roundCompleted = room.drawerIndex === 0;
+
+  if (!roundCompleted) return false;
+
+  // ✅ SCORE LIMIT (checked ONLY after full round)
   if (typeof room.maxScore === "number") {
-    if (room.players.some(p => p.score >= room.maxScore)) {
-      console.log("🏁 End game: max score reached");
+    const maxScoreReached = room.players.some(
+      p => p.score >= room.maxScore
+    );
+
+    if (maxScoreReached) {
+      console.log("🏁 End game: max score reached after full round");
       return true;
     }
   }
 
-  // ✅ ROUND LIMIT
+  // ✅ ROUND LIMIT (checked ONLY after full round)
   if (
     typeof room.totalRounds === "number" &&
     room.round > room.totalRounds
   ) {
-    console.log("🏁 End game: max rounds reached");
+    console.log("🏁 End game: max rounds completed");
     return true;
   }
 
   return false;
 }
+
 
 /* =========================
    END GAME
@@ -146,50 +161,96 @@ function endGame(io, room, reason = "completed") {
 /* =========================
    START REMATCH
 ========================= */
+ 
+
 function startRematch(io, room) {
   if (!room?.rematch) return;
 
+  // Rematch is only valid for private rooms
+  if (room.type !== "private") {
+    io.to(room.code).emit("FORCE_EXIT");
+    return;
+  }
+
   console.log(`🔁 Rematch starting → ${room.code}`);
 
+  /* =========================
+     Collect players who voted PLAY
+  ========================== */
   const playIds = new Set(
     [...room.rematch.votes.entries()]
-      .filter(([, v]) => v === "play")
-      .map(([id]) => id)
+      .filter(([, vote]) => vote === "play")
+      .map(([userId]) => userId)
   );
 
+  /* =========================
+     Keep only eligible players
+  ========================== */
   room.players = room.players.filter(
     p => playIds.has(p.id) && p.connected !== false
   );
 
+  /* =========================
+     Need at least 2 players
+  ========================== */
   if (room.players.length < 2) {
     io.to(room.code).emit("FORCE_EXIT");
 
-    if (room.type === "private") {
-      scheduleRoomCleanup(room.code, room.__rooms);
-    }
+    scheduleRoomCleanup(room.code, room.__rooms);
     return;
   }
 
+  /* =========================
+     Reset game state
+  ========================== */
   room.status = "playing";
   room.round = 1;
   room.drawerIndex = 0;
   room.drawerId = null;
+
+  room.phase = null;
   room.guessingAllowed = false;
   room.currentWord = null;
   room.wordChoices = null;
+  room.revealedLetters = [];
+  room.correctGuessers = new Set();
+  room.turnEnded = false;
+  room.revealsDone = 0;
+  room.hasDrawn = false;
+
   room.drawing = [];
   room.undoStack = [];
+
   room.rematch = null;
 
+  /* =========================
+     Reset players
+  ========================== */
   room.players.forEach(p => {
     p.score = 0;
     p.guessedCorrectly = false;
     p.connected = true;
   });
 
+  /* =========================
+     Notify clients
+  ========================== */
   io.to(room.code).emit("REMATCH_STARTED");
 
+  /* =========================
+     Start fresh game loop
+  ========================== */
   require("./roundEngine").startRound(io, room);
+}
+
+function applyScore(io, room, userId) {
+  const player = room.players.find(p => p.id === userId);
+  if (!player) return;
+
+  io.to(room.code).emit("SCORE_UPDATED", {
+    userId,
+    score: player.score,
+  });
 }
 
 /* =========================
@@ -200,4 +261,5 @@ module.exports = {
   shouldEndGame,
   endGame,
   startRematch,
+  applyScore,
 };

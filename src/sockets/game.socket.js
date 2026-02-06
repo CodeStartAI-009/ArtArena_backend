@@ -123,7 +123,7 @@ module.exports = (io, socket, rooms) => {
   });
 
   /* =========================
-     GUESS (✅ FIXED SCORING)
+     GUESS (✅ FINAL, CORRECT)
   ========================== */
   socket.on("GUESS", async ({ code, guess }) => {
     const room = rooms.get(code);
@@ -139,17 +139,19 @@ module.exports = (io, socket, rooms) => {
     const normalized = guess?.trim().toLowerCase();
     if (!normalized) return;
 
+    /* ---------- WRONG GUESS ---------- */
     if (normalized !== room.currentWord.toLowerCase()) {
-      io.to(code).emit("WRONG_GUESS", { userId: playerId, guess: normalized });
+      io.to(code).emit("WRONG_GUESS", {
+        userId: playerId,
+        guess: normalized,
+      });
       return;
     }
 
-    /* ✅ SCORE FIRST */
+    /* ---------- SCORE (CALCULATION ONLY) ---------- */
     scoringEngine.awardScore(room, playerId);
 
-    /* ✅ THEN LOCK PLAYER */
-    player.guessedCorrectly = true;
-
+    /* ---------- REWARDS ---------- */
     try {
       const result = await applyRewards(playerId, GUESS_REWARD);
       if (result?.user) {
@@ -167,15 +169,28 @@ module.exports = (io, socket, rooms) => {
       console.error("❌ Reward failed:", err);
     }
 
+    /* ---------- CLIENT FEEDBACK ---------- */
     io.to(code).emit("CORRECT_GUESS", {
       userId: playerId,
       username: player.username,
     });
 
+    /* ---------- ROUND LOGIC (LOCK + END TURN) ---------- */
     roundEngine.onAnyGuess(io, room, playerId, true);
+
     emitGameState(io, room);
   });
-  socket.on("ALLOW_GUESSING", ({ code }) => { const room = rooms.get(code); if (!room || room.turnEnded) return; if (String(room.drawerId) !== String(socket.userId)) return; roundEngine.allowGuessing(io, room); });
+
+  /* =========================
+     MANUAL GUESS ENABLE
+  ========================== */
+  socket.on("ALLOW_GUESSING", ({ code }) => {
+    const room = rooms.get(code);
+    if (!room || room.turnEnded) return;
+    if (String(room.drawerId) !== String(socket.userId)) return;
+    roundEngine.allowGuessing(io, room);
+  });
+
   /* =========================
      PUBLIC MATCHMAKING
   ========================== */
