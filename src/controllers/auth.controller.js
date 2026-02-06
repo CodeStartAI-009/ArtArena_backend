@@ -35,23 +35,43 @@ async function createUniqueGuestName() {
 }
 
 /* =========================
-   GUEST LOGIN  ✅ FIXED
+   GUEST LOGIN (FINAL FIX)
 ========================= */
 exports.guestLogin = async (req, res) => {
   try {
     const guestId = req.headers["x-guest-id"];
     const { referralCode } = req.body;
 
-    /* ---------- REUSE EXISTING GUEST ---------- */
+    /* =====================================================
+       REUSE EXISTING GUEST (IMPORTANT FIX)
+    ===================================================== */
     if (guestId) {
       const existing = await User.findById(guestId);
 
       if (existing && existing.isGuest) {
-        // 🔥 ENSURE REFERRAL CODE EXISTS
+        // ensure guest has own referral code
         if (!existing.referralCode) {
           existing.referralCode = generateReferralCode();
-          await existing.save();
         }
+
+        // 🔥 APPLY REFERRAL IF NOT YET REWARDED
+        if (
+          referralCode &&
+          !existing.referralRewarded &&
+          referralCode !== existing.referralCode
+        ) {
+          const referrer = await User.findOne({ referralCode });
+
+          if (referrer) {
+            referrer.coins += 100;
+            await referrer.save();
+
+            existing.referredBy = referralCode;
+            existing.referralRewarded = true;
+          }
+        }
+
+        await existing.save();
 
         return res.json({
           user: existing,
@@ -60,7 +80,9 @@ exports.guestLogin = async (req, res) => {
       }
     }
 
-    /* ---------- CREATE NEW GUEST ---------- */
+    /* =====================================================
+       CREATE NEW GUEST
+    ===================================================== */
     const guestUsername = await createUniqueGuestName();
 
     const guest = await User.create({
@@ -71,17 +93,19 @@ exports.guestLogin = async (req, res) => {
       xp: 0,
       level: 1,
 
-      // 🔗 REFERRAL SYSTEM
-      referralCode: generateReferralCode(), // 🔥 THIS WAS MISSING
+      referralCode: generateReferralCode(),
       referredBy: referralCode || null,
       referralRewarded: false,
     });
 
-    /* ---------- 🔥 INSTANT REFERRAL REWARD ---------- */
-    if (referralCode) {
+    /* ---------- APPLY REFERRAL FOR NEW GUEST ---------- */
+    if (
+      referralCode &&
+      referralCode !== guest.referralCode
+    ) {
       const referrer = await User.findOne({ referralCode });
 
-      if (referrer && !guest.referralRewarded) {
+      if (referrer) {
         referrer.coins += 100;
         await referrer.save();
 
@@ -115,7 +139,7 @@ exports.emailSignup = async (req, res) => {
     }
 
     /* =========================
-       CASE 1: EMAIL EXISTS → LOGIN
+       CASE 1: EMAIL EXISTS
     ========================== */
     const existingUser = await User.findOne({ email });
 
@@ -131,7 +155,7 @@ exports.emailSignup = async (req, res) => {
     }
 
     /* =========================
-       CASE 2: UPGRADE GUEST → EMAIL USER
+       CASE 2: UPGRADE GUEST
     ========================== */
     if (guestId) {
       const guest = await User.findById(guestId);
@@ -143,7 +167,6 @@ exports.emailSignup = async (req, res) => {
         guest.coins += 300;
         guest.gems += 100;
 
-        // 🔗 Ensure referral code exists
         if (!guest.referralCode) {
           guest.referralCode = generateReferralCode();
         }
