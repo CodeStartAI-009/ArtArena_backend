@@ -62,15 +62,24 @@ function shouldEndGame(room) {
 
   const playersCount = room.players.length;
 
-  /**
-   * A round is considered COMPLETE only when
-   * drawerIndex is back to 0 (everyone drew once)
-   */
-  const roundCompleted = room.drawerIndex === 0;
+  /* =========================
+     IMPORTANT:
+     We are INSIDE endTurn()
+     drawerIndex has NOT been incremented yet.
 
-  if (!roundCompleted) return false;
+     A round completes ONLY if
+     the CURRENT drawer is the LAST player.
+  ========================== */
+  const isLastDrawerOfRound =
+    room.drawerIndex === playersCount - 1;
 
-  // ✅ SCORE LIMIT (checked ONLY after full round)
+  // ❌ Do NOT end game mid-round
+  if (!isLastDrawerOfRound) return false;
+
+  /* =========================
+     SCORE LIMIT
+     (checked ONLY after full round)
+  ========================== */
   if (typeof room.maxScore === "number") {
     const maxScoreReached = room.players.some(
       p => p.score >= room.maxScore
@@ -82,10 +91,13 @@ function shouldEndGame(room) {
     }
   }
 
-  // ✅ ROUND LIMIT (checked ONLY after full round)
+  /* =========================
+     ROUND LIMIT
+     (checked ONLY after full round)
+  ========================== */
   if (
     typeof room.totalRounds === "number" &&
-    room.round > room.totalRounds
+    room.round >= room.totalRounds
   ) {
     console.log("🏁 End game: max rounds completed");
     return true;

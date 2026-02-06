@@ -216,23 +216,49 @@ function revealHint(io, room) {
    TURN END
 ========================= */
 function endTurn(io, room) {
-  if (room.turnEnded) return;
+  if (!room || room.turnEnded) return;
 
+  /* =========================
+     LOCK TURN
+  ========================== */
   room.turnEnded = true;
   clearAllRoundTimers(room);
 
-  io.to(room.code).emit("TURN_END", { word: room.currentWord });
+  /* =========================
+     NOTIFY CLIENTS
+  ========================== */
+  io.to(room.code).emit("TURN_END", {
+    word: room.currentWord,
+  });
 
-  if (gameEngine.shouldEndGame(room)) {
+  /* =========================
+     CHECK IF ROUND JUST ENDED
+     (this is the LAST drawer)
+  ========================== */
+  const isLastTurnOfRound =
+    room.drawerIndex === room.players.length - 1;
+
+  if (isLastTurnOfRound && gameEngine.shouldEndGame(room)) {
     gameEngine.endGame(io, room, "rule_reached");
     return;
   }
 
-  room.drawerIndex = (room.drawerIndex + 1) % room.players.length;
-  if (room.drawerIndex === 0) room.round++;
+  /* =========================
+     ADVANCE DRAWER / ROUND
+  ========================== */
+  room.drawerIndex =
+    (room.drawerIndex + 1) % room.players.length;
 
+  if (room.drawerIndex === 0) {
+    room.round += 1;
+  }
+
+  /* =========================
+     START NEXT TURN
+  ========================== */
   startRound(io, room);
 }
+
 
 /* =========================
    HELPERS

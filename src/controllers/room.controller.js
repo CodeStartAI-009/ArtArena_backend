@@ -14,7 +14,7 @@ const THEMES = [
 ];
 
 const ROOM_CREATE_COST = 10;
-const ROOM_JOIN_COST = 25;
+const ROOM_JOIN_COST = 5;
 
 const generateCode = () =>
   Math.random().toString(36).substring(2, 8).toUpperCase();
