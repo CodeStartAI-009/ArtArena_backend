@@ -11,7 +11,7 @@ const WORD_SELECT_TIME = 10_000;
 const NO_DRAW_TIMEOUT = 15_000;
 const CLASSIC_GUESS_TIME = 30_000;
 const DRAW_IDLE_TO_GUESS = 5_000;
-const HINT_WINDOW = 10_000; // 10s rolling window
+const HINT_WINDOW = 10_000; // rolling window
 
 /* =========================
    START ROUND
@@ -19,13 +19,21 @@ const HINT_WINDOW = 10_000; // 10s rolling window
 function startRound(io, room) {
   if (!room || room.status !== "playing") return;
 
-  console.log("🟢 START ROUND", room.code, room.round, room.mode);
+  // ❌ Never run rounds in Together mode
+  if (room.mode === "Together") return;
+
+  console.log("🟢 START ROUND", {
+    room: room.code,
+    round: room.round,
+    mode: room.mode,
+  });
 
   /* ---------- Reset round state ---------- */
   room.phase = "draw";
   room.guessingAllowed = false;
-  room.currentWord = null;
   room.wordSelected = false;
+  room.currentWord = null;
+
   room.revealedLetters = [];
   room.correctGuessers = new Set();
   room.turnEnded = false;
@@ -36,21 +44,30 @@ function startRound(io, room) {
 
   room.drawing = [];
   room.undoStack = [];
-  room.players.forEach(p => (p.guessedCorrectly = false));
+
+  room.players.forEach(p => {
+    p.guessedCorrectly = false;
+  });
 
   clearAllRoundTimers(room);
   io.to(room.code).emit("CLEAR_CANVAS");
 
   /* ---------- Drawer ---------- */
-  room.drawerId = room.players[room.drawerIndex]?.id;
+  const drawer = room.players[room.drawerIndex];
+  if (!drawer) return;
+
+  room.drawerId = drawer.id;
   room.wordChoices = pickRandomWords(room.mode, 3);
 
-  /* ---------- Word select timer ---------- */
+  /* ---------- Word select timeout ---------- */
   room.wordSelectTimer = setTimeout(() => {
-    if (!room.wordSelected && !room.turnEnded) endTurn(io, room);
+    if (!room.wordSelected && !room.turnEnded) {
+      console.log("⏱️ No word selected → end turn");
+      endTurn(io, room);
+    }
   }, WORD_SELECT_TIME);
 
-  /* ---------- Notify ---------- */
+  /* ---------- Notify clients ---------- */
   io.to(room.code).emit("ROUND_START", {
     round: room.round,
     drawerId: room.drawerId,
@@ -66,10 +83,12 @@ function startRound(io, room) {
 ========================= */
 function onWordSelected(io, room, userId, word) {
   if (!room || room.turnEnded) return;
-  if (room.wordSelected || userId !== room.drawerId) return;
+  if (room.wordSelected) return;
+  if (String(userId) !== String(room.drawerId)) return;
 
   room.wordSelected = true;
   room.currentWord = word;
+
   clearTimeout(room.wordSelectTimer);
 
   console.log("✅ WORD SELECTED:", word);
@@ -85,6 +104,7 @@ function onWordSelected(io, room, userId, word) {
   if (room.mode === "Quick") {
     room.guessingAllowed = true;
     startHintSystem(io, room, getSafeDuration(room));
+    emitGameState(io, room);
   }
 }
 
@@ -92,12 +112,14 @@ function onWordSelected(io, room, userId, word) {
    DRAW TRACKING
 ========================= */
 function onDrawerDraw(io, room) {
-  if (room.turnEnded) return;
+  if (!room || room.turnEnded) return;
 
   if (!room.hasDrawn) {
     room.hasDrawn = true;
 
     if (room.mode === "Classic") {
+      clearTimeout(room.drawIdleTimer);
+
       room.drawIdleTimer = setTimeout(() => {
         allowGuessing(io, room);
       }, DRAW_IDLE_TO_GUESS);
@@ -106,10 +128,10 @@ function onDrawerDraw(io, room) {
 }
 
 /* =========================
-   GUESSING
+   ALLOW GUESSING
 ========================= */
 function allowGuessing(io, room) {
-  if (room.turnEnded || room.guessingAllowed) return;
+  if (!room || room.turnEnded || room.guessingAllowed) return;
 
   room.guessingAllowed = true;
   room.lastGuessAt = Date.now();
@@ -123,24 +145,30 @@ function allowGuessing(io, room) {
 }
 
 /* =========================
-   CORRECT GUESS
+   GUESS HANDLING
 ========================= */
 function onAnyGuess(io, room, userId, correct) {
-  if (!correct || !room || room.turnEnded || !room.guessingAllowed) return;
+  if (!room || room.turnEnded || !room.guessingAllowed) return;
+  if (!correct) return;
 
-  const player = room.players.find(p => String(p.id) === String(userId));
+  const player = room.players.find(
+    p => String(p.id) === String(userId)
+  );
+
   if (!player || player.guessedCorrectly) return;
 
   player.guessedCorrectly = true;
   room.correctGuessers.add(userId);
 
-  // 🔁 reset rolling hint window
   room.lastGuessAt = Date.now();
 
+  // ✅ APPLY SCORE HERE (THIS WAS CRITICAL)
   gameEngine.applyScore(io, room, userId);
 
   const totalGuessers = room.players.length - 1;
+
   if (room.correctGuessers.size >= totalGuessers) {
+    console.log("🏁 All players guessed → end turn");
     endTurn(io, room);
   }
 }
@@ -150,19 +178,26 @@ function onAnyGuess(io, room, userId, correct) {
 ========================= */
 function startNoDrawTimer(io, room) {
   room.noDrawTimer = setTimeout(() => {
-    if (!room.hasDrawn && !room.turnEnded) endTurn(io, room);
+    if (!room.hasDrawn && !room.turnEnded) {
+      console.log("❌ No drawing → end turn");
+      endTurn(io, room);
+    }
   }, NO_DRAW_TIMEOUT);
 }
 
 /* =========================
-   ROLLING HINT SYSTEM
+   HINT SYSTEM
 ========================= */
 function startHintSystem(io, room, totalDuration) {
   room.hintsGiven = 0;
   room.lastGuessAt = Date.now();
 
   scheduleHintWindow(io, room);
-  room.endTimer = setTimeout(() => endTurn(io, room), totalDuration);
+
+  room.endTimer = setTimeout(() => {
+    console.log("⏱️ Guess time over → end turn");
+    endTurn(io, room);
+  }, totalDuration);
 }
 
 function scheduleHintWindow(io, room) {
@@ -184,9 +219,6 @@ function scheduleHintWindow(io, room) {
   }, HINT_WINDOW);
 }
 
-/* =========================
-   HINT SYSTEM
-========================= */
 function revealHint(io, room) {
   if (
     !room.currentWord ||
@@ -195,6 +227,7 @@ function revealHint(io, room) {
   ) return;
 
   const hidden = [];
+
   for (let i = 0; i < room.currentWord.length; i++) {
     if (!room.revealedLetters.some(r => r.index === i)) {
       hidden.push(i);
@@ -218,34 +251,21 @@ function revealHint(io, room) {
 function endTurn(io, room) {
   if (!room || room.turnEnded) return;
 
-  /* =========================
-     LOCK TURN
-  ========================== */
   room.turnEnded = true;
   clearAllRoundTimers(room);
 
-  /* =========================
-     NOTIFY CLIENTS
-  ========================== */
   io.to(room.code).emit("TURN_END", {
     word: room.currentWord,
   });
 
-  /* =========================
-     CHECK IF ROUND JUST ENDED
-     (this is the LAST drawer)
-  ========================== */
-  const isLastTurnOfRound =
+  const isLastDrawerOfRound =
     room.drawerIndex === room.players.length - 1;
 
-  if (isLastTurnOfRound && gameEngine.shouldEndGame(room)) {
+  if (isLastDrawerOfRound && gameEngine.shouldEndGame(room)) {
     gameEngine.endGame(io, room, "rule_reached");
     return;
   }
 
-  /* =========================
-     ADVANCE DRAWER / ROUND
-  ========================== */
   room.drawerIndex =
     (room.drawerIndex + 1) % room.players.length;
 
@@ -253,19 +273,15 @@ function endTurn(io, room) {
     room.round += 1;
   }
 
-  /* =========================
-     START NEXT TURN
-  ========================== */
   startRound(io, room);
 }
-
 
 /* =========================
    HELPERS
 ========================= */
 function sendWordChoices(io, room) {
   for (const socket of io.sockets.sockets.values()) {
-    if (socket.userId === room.drawerId) {
+    if (String(socket.userId) === String(room.drawerId)) {
       socket.emit("WORD_CHOICES", room.wordChoices);
       break;
     }
@@ -290,6 +306,9 @@ function clearAllRoundTimers(room) {
   });
 }
 
+/* =========================
+   EXPORTS
+========================= */
 module.exports = {
   startRound,
   onWordSelected,

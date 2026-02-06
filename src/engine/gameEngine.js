@@ -1,5 +1,11 @@
 const scheduleRoomCleanup = require("../utils/scheduleRoomCleanup");
 const emitGameState = require("../utils/emitGameState");
+const roundEngine = require("./roundEngine");
+
+/* =========================
+   CONSTANTS
+========================= */
+const TOGETHER_DURATION = 5 * 60 * 1000; // 5 minutes
 
 /* =========================
    START GAME
@@ -11,29 +17,54 @@ function startGame(io, room) {
      TOGETHER MODE
   ========================== */
   if (room.mode === "Together") {
-    if (room.players.length !== 2) {
-      io.to(room.code).emit("FORCE_EXIT");
+    if (!Array.isArray(room.players) || room.players.length !== 2) {
+      console.log("❌ Together mode start failed: invalid player count");
+
+      io.to(room.code).emit("FORCE_EXIT", {
+        reason: "Together mode requires exactly 2 players",
+      });
+
+      room.status = "ended";
+      room.endedAt = Date.now();
       return;
     }
 
+    // Assign sides
     room.players[0].side = "left";
     room.players[1].side = "right";
+
     room.status = "playing";
+    room.startedAt = Date.now();
 
     emitGameState(io, room);
 
     io.to(room.code).emit("TOGETHER_STARTED", {
       leftPlayerId: room.players[0].id,
       rightPlayerId: room.players[1].id,
+      durationMs: TOGETHER_DURATION,
     });
+
+    console.log(`🎨 Together game started → ${room.code}`);
+
+    /* =========================
+       🔑 TOGETHER MODE TIMER
+    ========================== */
+    room.togetherTimer = setTimeout(() => {
+      if (room.status !== "playing") return;
+
+      console.log("⏱️ Together mode time limit reached");
+      endGame(io, room, "time_up");
+    }, TOGETHER_DURATION);
 
     return;
   }
 
   /* =========================
-     NORMAL GAME START
+     NORMAL GAME MODES
   ========================== */
   room.status = "playing";
+  room.startedAt = Date.now();
+
   room.round = 1;
   room.drawerIndex = 0;
   room.drawerId = null;
@@ -48,7 +79,7 @@ function startGame(io, room) {
 
   console.log(`🎮 Game started → ${room.code}`);
 
-  require("./roundEngine").startRound(io, room);
+  roundEngine.startRound(io, room);
 }
 
 /* =========================
@@ -57,55 +88,31 @@ function startGame(io, room) {
 function shouldEndGame(room) {
   if (!room || room.status !== "playing") return false;
 
-  // Together mode never auto-ends
+  // ❌ Together mode does NOT use this
   if (room.mode === "Together") return false;
 
   const playersCount = room.players.length;
 
-  /* =========================
-     IMPORTANT:
-     We are INSIDE endTurn()
-     drawerIndex has NOT been incremented yet.
-
-     A round completes ONLY if
-     the CURRENT drawer is the LAST player.
-  ========================== */
   const isLastDrawerOfRound =
     room.drawerIndex === playersCount - 1;
 
-  // ❌ Do NOT end game mid-round
   if (!isLastDrawerOfRound) return false;
 
-  /* =========================
-     SCORE LIMIT
-     (checked ONLY after full round)
-  ========================== */
   if (typeof room.maxScore === "number") {
-    const maxScoreReached = room.players.some(
-      p => p.score >= room.maxScore
-    );
-
-    if (maxScoreReached) {
-      console.log("🏁 End game: max score reached after full round");
+    if (room.players.some(p => p.score >= room.maxScore)) {
       return true;
     }
   }
 
-  /* =========================
-     ROUND LIMIT
-     (checked ONLY after full round)
-  ========================== */
   if (
     typeof room.totalRounds === "number" &&
     room.round >= room.totalRounds
   ) {
-    console.log("🏁 End game: max rounds completed");
     return true;
   }
 
   return false;
 }
-
 
 /* =========================
    END GAME
@@ -114,14 +121,18 @@ function endGame(io, room, reason = "completed") {
   if (!room || room.status === "ended") return;
 
   room.status = "ended";
+  room.endedAt = Date.now();
 
-  /* ---------- Stop timers ---------- */
+  /* ---------- Clear timers ---------- */
   clearTimeout(room.mainTimer);
   clearTimeout(room.lastChanceTimer);
+  clearTimeout(room.togetherTimer);
+
   room.mainTimer = null;
   room.lastChanceTimer = null;
+  room.togetherTimer = null;
 
-  /* ---------- Determine winner ---------- */
+  /* ---------- Winner ---------- */
   const winner =
     room.players.length > 0
       ? [...room.players].sort((a, b) => b.score - a.score)[0]
@@ -131,7 +142,7 @@ function endGame(io, room, reason = "completed") {
     `🏁 Game ended (${reason}) → Winner: ${winner?.username ?? "N/A"}`
   );
 
-  /* ---------- Freeze gameplay ---------- */
+  /* ---------- Freeze game ---------- */
   room.guessingAllowed = false;
   room.currentWord = null;
   room.wordChoices = null;
@@ -163,7 +174,7 @@ function endGame(io, room, reason = "completed") {
 
   io.to(room.code).emit("REMATCH_PROMPT");
 
-  /* ---------- Auto cleanup ---------- */
+  /* ---------- Cleanup ---------- */
   const connectedPlayers = room.players.filter(p => p.connected);
   if (connectedPlayers.length < 2 && room.type === "private") {
     scheduleRoomCleanup(room.code, room.__rooms);
@@ -173,12 +184,9 @@ function endGame(io, room, reason = "completed") {
 /* =========================
    START REMATCH
 ========================= */
- 
-
 function startRematch(io, room) {
   if (!room?.rematch) return;
 
-  // Rematch is only valid for private rooms
   if (room.type !== "private") {
     io.to(room.code).emit("FORCE_EXIT");
     return;
@@ -186,75 +194,44 @@ function startRematch(io, room) {
 
   console.log(`🔁 Rematch starting → ${room.code}`);
 
-  /* =========================
-     Collect players who voted PLAY
-  ========================== */
   const playIds = new Set(
     [...room.rematch.votes.entries()]
       .filter(([, vote]) => vote === "play")
       .map(([userId]) => userId)
   );
 
-  /* =========================
-     Keep only eligible players
-  ========================== */
   room.players = room.players.filter(
     p => playIds.has(p.id) && p.connected !== false
   );
 
-  /* =========================
-     Need at least 2 players
-  ========================== */
   if (room.players.length < 2) {
     io.to(room.code).emit("FORCE_EXIT");
-
     scheduleRoomCleanup(room.code, room.__rooms);
     return;
   }
 
-  /* =========================
-     Reset game state
-  ========================== */
+  /* ---------- Reset ---------- */
   room.status = "playing";
   room.round = 1;
   room.drawerIndex = 0;
   room.drawerId = null;
 
-  room.phase = null;
-  room.guessingAllowed = false;
-  room.currentWord = null;
-  room.wordChoices = null;
-  room.revealedLetters = [];
-  room.correctGuessers = new Set();
-  room.turnEnded = false;
-  room.revealsDone = 0;
-  room.hasDrawn = false;
-
-  room.drawing = [];
-  room.undoStack = [];
-
-  room.rematch = null;
-
-  /* =========================
-     Reset players
-  ========================== */
   room.players.forEach(p => {
     p.score = 0;
     p.guessedCorrectly = false;
     p.connected = true;
   });
 
-  /* =========================
-     Notify clients
-  ========================== */
+  room.rematch = null;
+
   io.to(room.code).emit("REMATCH_STARTED");
 
-  /* =========================
-     Start fresh game loop
-  ========================== */
-  require("./roundEngine").startRound(io, room);
+  roundEngine.startRound(io, room);
 }
 
+/* =========================
+   SCORE BROADCAST
+========================= */
 function applyScore(io, room, userId) {
   const player = room.players.find(p => p.id === userId);
   if (!player) return;
@@ -266,7 +243,7 @@ function applyScore(io, room, userId) {
 }
 
 /* =========================
-   EXPORTS (SINGLE SOURCE)
+   EXPORTS
 ========================= */
 module.exports = {
   startGame,
