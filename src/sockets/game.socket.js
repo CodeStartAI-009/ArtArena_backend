@@ -65,6 +65,9 @@ function startPublicGame(io, room) {
   }, 2000);
 }
 
+/* =========================
+   SOCKET HANDLERS
+========================= */
 module.exports = (io, socket, rooms) => {
 
   /* =========================
@@ -123,7 +126,7 @@ module.exports = (io, socket, rooms) => {
   });
 
   /* =========================
-     GUESS (✅ FINAL, CORRECT)
+     GUESS
   ========================== */
   socket.on("GUESS", async ({ code, guess }) => {
     const room = rooms.get(code);
@@ -139,7 +142,6 @@ module.exports = (io, socket, rooms) => {
     const normalized = guess?.trim().toLowerCase();
     if (!normalized) return;
 
-    /* ---------- WRONG GUESS ---------- */
     if (normalized !== room.currentWord.toLowerCase()) {
       io.to(code).emit("WRONG_GUESS", {
         userId: playerId,
@@ -148,7 +150,7 @@ module.exports = (io, socket, rooms) => {
       return;
     }
 
-    /* ---------- SCORE (CALCULATION ONLY) ---------- */
+    /* ---------- SCORE ---------- */
     scoringEngine.awardScore(room, playerId);
 
     /* ---------- REWARDS ---------- */
@@ -169,20 +171,24 @@ module.exports = (io, socket, rooms) => {
       console.error("❌ Reward failed:", err);
     }
 
-    /* ---------- CLIENT FEEDBACK ---------- */
     io.to(code).emit("CORRECT_GUESS", {
       userId: playerId,
       username: player.username,
     });
 
-    /* ---------- ROUND LOGIC (LOCK + END TURN) ---------- */
-    roundEngine.onAnyGuess(io, room, playerId, true);
+    /* ---------- ROUND ENGINE ---------- */
+    const result = roundEngine.onAnyGuess(io, room, playerId, true);
+
+    if (result?.checkGameEnd && gameEngine.shouldEndGame(room)) {
+      gameEngine.endGame(io, room, "rule_reached");
+      return;
+    }
 
     emitGameState(io, room);
   });
 
   /* =========================
-     MANUAL GUESS ENABLE
+     ALLOW GUESSING (DRAWER)
   ========================== */
   socket.on("ALLOW_GUESSING", ({ code }) => {
     const room = rooms.get(code);
