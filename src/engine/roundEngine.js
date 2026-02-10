@@ -206,6 +206,9 @@ function revealHint(io, room) {
 function endTurn(io, room) {
   if (!room || room.turnEnded) return { ended: false };
 
+  const wasLastDrawer =
+    room.drawerIndex === room.players.length - 1;
+
   room.turnEnded = true;
   clearAllRoundTimers(room);
 
@@ -213,24 +216,29 @@ function endTurn(io, room) {
     word: room.currentWord,
   });
 
-  const isLastDrawerOfRound =
-    room.drawerIndex === room.players.length - 1;
-
-  // 🔁 SIGNAL instead of calling gameEngine
-  if (isLastDrawerOfRound) {
-    return { ended: true, checkGameEnd: true };
-  }
-
+  // 🔁 advance drawer
   room.drawerIndex =
     (room.drawerIndex + 1) % room.players.length;
 
-  if (room.drawerIndex === 0) {
-    room.round += 1;
+  // 🔁 compute next round WITHOUT applying yet
+  const nextRound =
+    room.drawerIndex === 0 ? room.round + 1 : room.round;
+
+  // 🔁 signal game-end check USING CURRENT ROUND
+  if (wasLastDrawer) {
+    return {
+      ended: true,
+      checkGameEnd: true,
+      nextRound,
+    };
   }
 
+  // 🔁 continue same round
+  room.round = nextRound;
   startRound(io, room);
   return { ended: true };
 }
+
 
 
 

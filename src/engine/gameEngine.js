@@ -74,34 +74,50 @@ function startGame(io, room) {
 /* =========================
    GAME END RULES (RULE ONLY)
 ========================= */
-function shouldEndGame(room) {
+function shouldEndGame(room, wasLastDrawer) {
   if (!room || room.status !== "playing") return false;
 
-  // ❌ Together mode does NOT use this
   if (room.mode === "Together") return false;
 
-  const playersCount = room.players.length;
+  /* =========================
+     MAX SCORE RULE
+     (Classic / Quick only)
+  ========================== */
+  if (room.mode !== "Kids") {
+    const maxScore =
+      typeof room.maxScore === "number"
+        ? room.maxScore
+        : typeof room.score === "number"
+        ? room.score
+        : null;
 
-  const isLastDrawerOfRound =
-    room.drawerIndex === playersCount - 1;
-
-  if (!isLastDrawerOfRound) return false;
-
-  if (typeof room.maxScore === "number") {
-    if (room.players.some(p => p.score >= room.maxScore)) {
+    if (
+      maxScore !== null &&
+      room.players.some(
+        p => typeof p.score === "number" && p.score >= maxScore
+      )
+    ) {
       return true;
     }
   }
 
+  /* =========================
+     ROUND LIMIT RULE
+     (Kids / Classic / Quick)
+  ========================== */
   if (
+    wasLastDrawer &&
     typeof room.totalRounds === "number" &&
-    room.round >= room.totalRounds
+    room.round === room.totalRounds
   ) {
     return true;
   }
 
   return false;
 }
+
+
+
 
 /* =========================
    END GAME

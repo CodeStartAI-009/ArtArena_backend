@@ -179,11 +179,22 @@ module.exports = (io, socket, rooms) => {
     /* ---------- ROUND ENGINE ---------- */
     const result = roundEngine.onAnyGuess(io, room, playerId, true);
 
-    if (result?.checkGameEnd && gameEngine.shouldEndGame(room)) {
-      gameEngine.endGame(io, room, "rule_reached");
+    if (result?.checkGameEnd) {
+      const shouldEnd = gameEngine.shouldEndGame(
+        room,
+        true // because checkGameEnd only happens on last drawer
+      );
+    
+      if (shouldEnd) {
+        gameEngine.endGame(io, room, "rule_reached");
+      } else {
+        room.round = result.nextRound;
+        roundEngine.startRound(io, room);
+      }
+    
       return;
     }
-
+    
     emitGameState(io, room);
   });
 
