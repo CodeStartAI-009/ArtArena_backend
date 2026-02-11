@@ -20,10 +20,7 @@ const app = express();
 /* ✅ CORS — FRONTEND SAFE */
 app.use(
   cors({
-    origin:    [
-      "http://localhost:3000",
-      "https://artarena.io",
-    ],
+    origin: true,
     credentials: true,
   })
 );
