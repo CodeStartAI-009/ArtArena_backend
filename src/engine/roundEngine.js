@@ -7,7 +7,7 @@ const emitGameState = require("../utils/emitGameState");
 const WORD_SELECT_TIME = 10_000;
 const NO_DRAW_TIMEOUT = 15_000;
 const CLASSIC_GUESS_TIME = 30_000;
-const DRAW_IDLE_TO_GUESS = 5_000;
+const DRAW_IDLE_TO_GUESS = 10_000;
 const HINT_WINDOW = 10_000;
 
 /* =========================
