@@ -1,7 +1,6 @@
 // backend/src/engine/gameEngine.js
 
 const scheduleRoomCleanup = require("../utils/scheduleRoomCleanup");
-const emitGameState = require("../utils/emitGameState");
 const roundEngine = require("./roundEngine");
 
 /* =========================
@@ -15,9 +14,7 @@ const TOGETHER_DURATION = 5 * 60 * 1000;
 function startGame(io, room) {
   if (!room) return;
 
-  /* =========================
-     TOGETHER MODE
-  ========================== */
+  /* ===== TOGETHER MODE ===== */
   if (room.mode === "Together") {
     if (!Array.isArray(room.players) || room.players.length !== 2) {
       io.to(room.code).emit("FORCE_EXIT", {
@@ -32,8 +29,6 @@ function startGame(io, room) {
 
     room.status = "playing";
     room.startedAt = Date.now();
-
-    emitGameState(io, room);
 
     io.to(room.code).emit("TOGETHER_STARTED", {
       leftPlayerId: room.players[0].id,
@@ -50,9 +45,7 @@ function startGame(io, room) {
     return;
   }
 
-  /* =========================
-     NORMAL GAME
-  ========================== */
+  /* ===== NORMAL GAME ===== */
   room.status = "playing";
   room.startedAt = Date.now();
 
@@ -61,7 +54,7 @@ function startGame(io, room) {
   room.drawerId = null;
 
   room.players.forEach(p => {
-    p.score ??= 0;
+    p.score = typeof p.score === "number" ? p.score : 0;
     p.guessedCorrectly = false;
     p.connected = p.connected !== false;
   });
@@ -72,52 +65,31 @@ function startGame(io, room) {
 }
 
 /* =========================
-   GAME END RULES (RULE ONLY)
+   GAME END RULES
 ========================= */
-function shouldEndGame(room, wasLastDrawer) {
+function shouldEndGame(room, wasLastDrawer = false) {
   if (!room || room.status !== "playing") return false;
-
   if (room.mode === "Together") return false;
 
-  /* =========================
-     MAX SCORE RULE
-     (Classic / Quick only)
-  ========================== */
-  if (room.mode !== "Kids") {
-    const maxScore =
-      typeof room.maxScore === "number"
-        ? room.maxScore
-        : typeof room.score === "number"
-        ? room.score
-        : null;
-
-    if (
-      maxScore !== null &&
-      room.players.some(
-        p => typeof p.score === "number" && p.score >= maxScore
-      )
-    ) {
-      return true;
-    }
+  /* ===== MAX SCORE RULE ===== */
+  if (typeof room.maxScore === "number") {
+    const reached = room.players.some(
+      p => p.score >= room.maxScore
+    );
+    if (reached) return true;
   }
 
-  /* =========================
-     ROUND LIMIT RULE
-     (Kids / Classic / Quick)
-  ========================== */
+  /* ===== ROUND LIMIT RULE ===== */
   if (
     wasLastDrawer &&
     typeof room.totalRounds === "number" &&
-    room.round === room.totalRounds
+    room.round >= room.totalRounds
   ) {
     return true;
   }
 
   return false;
 }
-
-
-
 
 /* =========================
    END GAME
@@ -129,6 +101,7 @@ function endGame(io, room, reason = "completed") {
   room.endedAt = Date.now();
 
   clearTimeout(room.togetherTimer);
+  room.togetherTimer = null;
 
   const winner =
     room.players.length > 0
@@ -141,6 +114,7 @@ function endGame(io, room, reason = "completed") {
   room.drawing = [];
   room.undoStack = [];
 
+  /* ===== PREPARE REMATCH ===== */
   room.rematch = {
     active: true,
     votes: new Map(),
@@ -148,8 +122,8 @@ function endGame(io, room, reason = "completed") {
 
   io.to(room.code).emit("GAME_ENDED", {
     reason,
-    type: room.type,      // 🔥 ADD THIS
-    mode: room.mode, 
+    type: room.type,
+    mode: room.mode,
     winner: winner
       ? {
           id: winner.id,
@@ -170,6 +144,34 @@ function endGame(io, room, reason = "completed") {
   const connected = room.players.filter(p => p.connected);
   if (connected.length < 2 && room.type === "private") {
     scheduleRoomCleanup(room.code, room.__rooms);
+  }
+}
+
+/* =========================
+   HANDLE REMATCH VOTE
+========================= */
+function handleRematchVote(io, room, userId, decision) {
+  if (!room?.rematch || room.status !== "ended") return;
+
+  room.rematch.votes.set(userId, decision);
+
+  // Send vote updates
+  io.to(room.code).emit("REMATCH_UPDATE", {
+    votes: [...room.rematch.votes.entries()],
+  });
+
+  // If user chose exit → force exit immediately
+  if (decision === "exit") {
+    io.to(room.code).emit("FORCE_EXIT");
+    return;
+  }
+
+  const playCount = [...room.rematch.votes.values()]
+    .filter(v => v === "play").length;
+
+  // ✅ If 2 or more players want to play → start rematch
+  if (playCount >= 2) {
+    startRematch(io, room);
   }
 }
 
@@ -195,6 +197,7 @@ function startRematch(io, room) {
     return;
   }
 
+  /* ===== RESET GAME ===== */
   room.status = "playing";
   room.round = 1;
   room.drawerIndex = 0;
@@ -209,6 +212,7 @@ function startRematch(io, room) {
   room.rematch = null;
 
   io.to(room.code).emit("REMATCH_STARTED");
+
   roundEngine.startRound(io, room);
 }
 
@@ -220,4 +224,5 @@ module.exports = {
   shouldEndGame,
   endGame,
   startRematch,
+  handleRematchVote,   // 🔥 IMPORTANT
 };

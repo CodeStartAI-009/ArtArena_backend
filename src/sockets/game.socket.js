@@ -266,6 +266,39 @@ module.exports = (io, socket, rooms) => {
 
     tryPublicStart(io, room);
   });
+  /* =========================
+   REMATCH VOTE
+========================= */
+socket.on("REMATCH_VOTE", ({ code, decision }) => {
+  const room = rooms.get(code);
+  if (!room || room.status !== "ended") return;
+
+  if (!room.rematch || !room.rematch.votes) return;
+
+  if (!socket.userId) return;
+
+  // Save vote
+  room.rematch.votes.set(socket.userId, decision);
+
+  // Broadcast updated votes to clients
+  io.to(code).emit("REMATCH_UPDATE", {
+    votes: [...room.rematch.votes.entries()],
+  });
+
+  // 🔥 If player chose exit → remove immediately
+  if (decision === "exit") {
+    io.to(socket.id).emit("FORCE_EXIT");
+  }
+
+  // 🔥 If enough players voted play → start rematch
+  const playVotes = [...room.rematch.votes.values()].filter(
+    v => v === "play"
+  );
+
+  if (playVotes.length >= 2) {
+    gameEngine.startRematch(io, room);
+  }
+});
 
   /* =========================
      DISCONNECT
