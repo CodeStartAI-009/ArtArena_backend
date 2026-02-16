@@ -97,14 +97,12 @@ function onWordSelected(io, room, userId, word) {
 function onDrawerDraw(io, room) {
   if (!room || room.turnEnded) return;
 
-  if (!room.hasDrawn) {
+  if (!room.hasDrawn && room.mode === "Classic") {
     room.hasDrawn = true;
 
-    if (room.mode === "Classic") {
-      room.drawIdleTimer = setTimeout(() => {
-        allowGuessing(io, room);
-      }, DRAW_IDLE_TO_GUESS);
-    }
+    room.drawIdleTimer = setTimeout(() => {
+      allowGuessing(io, room);
+    }, DRAW_IDLE_TO_GUESS);
   }
 }
 
@@ -140,13 +138,14 @@ function onAnyGuess(io, room, userId, correct) {
   room.lastGuessAt = Date.now();
 
   const totalGuessers = room.players.length - 1;
+
   if (room.correctGuessers.size >= totalGuessers) {
-    return endTurn(io, room);
+    endTurn(io, room);
   }
 }
 
 /* =========================
-   TIMERS & HINTS
+   TIMERS
 ========================= */
 function startNoDrawTimer(io, room) {
   room.noDrawTimer = setTimeout(() => {
@@ -156,6 +155,9 @@ function startNoDrawTimer(io, room) {
   }, NO_DRAW_TIMEOUT);
 }
 
+/* =========================
+   HINT SYSTEM
+========================= */
 function startHintSystem(io, room, totalDuration) {
   room.hintsGiven = 0;
   room.lastGuessAt = Date.now();
@@ -171,6 +173,7 @@ function scheduleHintWindow(io, room) {
     if (room.turnEnded) return;
 
     const now = Date.now();
+
     if (!room.lastGuessAt || now - room.lastGuessAt >= HINT_WINDOW) {
       revealHint(io, room);
       room.hintsGiven++;
@@ -185,8 +188,11 @@ function revealHint(io, room) {
     return;
 
   const hidden = [];
+
   for (let i = 0; i < room.currentWord.length; i++) {
-    if (!room.revealedLetters.some(r => r.index === i)) hidden.push(i);
+    if (!room.revealedLetters.some(r => r.index === i)) {
+      hidden.push(i);
+    }
   }
 
   if (!hidden.length) return;
@@ -201,13 +207,10 @@ function revealHint(io, room) {
 }
 
 /* =========================
-   TURN END (ROUND ONLY)
+   TURN END
 ========================= */
 function endTurn(io, room) {
-  if (!room || room.turnEnded) return { ended: false };
-
-  const wasLastDrawer =
-    room.drawerIndex === room.players.length - 1;
+  if (!room || room.turnEnded) return;
 
   room.turnEnded = true;
   clearAllRoundTimers(room);
@@ -216,31 +219,24 @@ function endTurn(io, room) {
     word: room.currentWord,
   });
 
-  // 🔁 advance drawer
+  // advance drawer
   room.drawerIndex =
     (room.drawerIndex + 1) % room.players.length;
 
-  // 🔁 compute next round WITHOUT applying yet
-  const nextRound =
-    room.drawerIndex === 0 ? room.round + 1 : room.round;
+  // if full round completed
+  if (room.drawerIndex === 0) {
+    room.round += 1;
 
-  // 🔁 signal game-end check USING CURRENT ROUND
-  if (wasLastDrawer) {
-    return {
-      ended: true,
-      checkGameEnd: true,
-      nextRound,
-    };
+    const gameEngine = require("./gameEngine");
+
+    if (gameEngine.shouldEndGame(room)) {
+      gameEngine.endGame(io, room, "rule_reached");
+      return;
+    }
   }
 
-  // 🔁 continue same round
-  room.round = nextRound;
   startRound(io, room);
-  return { ended: true };
 }
-
-
-
 
 /* =========================
    HELPERS
@@ -272,9 +268,6 @@ function clearAllRoundTimers(room) {
   });
 }
 
-/* =========================
-   EXPORTS
-========================= */
 module.exports = {
   startRound,
   onWordSelected,
