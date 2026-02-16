@@ -148,6 +148,8 @@ function endGame(io, room, reason = "completed") {
 
   io.to(room.code).emit("GAME_ENDED", {
     reason,
+    type: room.type,      // 🔥 ADD THIS
+    mode: room.mode, 
     winner: winner
       ? {
           id: winner.id,
