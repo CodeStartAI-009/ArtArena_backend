@@ -2,7 +2,8 @@
 
 const scheduleRoomCleanup = require("../utils/scheduleRoomCleanup");
 const roundEngine = require("./roundEngine");
-
+const emitGameState = require("../utils/emitGameState");   // ✅ ADD THIS
+const { pickRandomWords } = require("./wordEngine");     
 /* =========================
    CONSTANTS
 ========================= */
