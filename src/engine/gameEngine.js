@@ -31,7 +31,7 @@ function startGame(io, room) {
     room.status = "playing";
     room.startedAt = Date.now();
     const words = pickRandomWords("Together");
-    room.currentWord = words[0];   // only one word
+    room.currentWord = words;   // only one word
     room.wordChoices = null;
 
     emitGameState(io, room); // 🔥 VERY IMPORTANT
