@@ -29,11 +29,17 @@ function startGame(io, room) {
 
     room.status = "playing";
     room.startedAt = Date.now();
+    const words = pickRandomWords("Together");
+    room.currentWord = words[0];   // only one word
+    room.wordChoices = null;
+
+    emitGameState(io, room); // 🔥 VERY IMPORTANT
 
     io.to(room.code).emit("TOGETHER_STARTED", {
       leftPlayerId: room.players[0].id,
       rightPlayerId: room.players[1].id,
       durationMs: TOGETHER_DURATION,
+      word: room.currentWord,
     });
 
     room.togetherTimer = setTimeout(() => {

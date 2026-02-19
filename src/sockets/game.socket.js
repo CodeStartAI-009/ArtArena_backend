@@ -118,13 +118,26 @@ module.exports = (io, socket, rooms) => {
   socket.on("SELECT_WORD", ({ code, word }) => {
     const room = rooms.get(code);
     if (!room || room.turnEnded) return;
+  
+    /* =========================
+       🚫 TOGETHER MODE
+       (word is auto selected)
+    ========================== */
+    if (room.mode === "Together") {
+      return; // Ignore manual selection
+    }
+  
+    /* =========================
+       NORMAL MODES
+    ========================== */
     if (String(room.drawerId) !== String(socket.userId)) return;
     if (!room.wordChoices?.includes(word)) return;
-
+  
     io.to(code).emit("WORD_SELECTED", { wordLength: word.length });
+  
     roundEngine.onWordSelected(io, room, socket.userId, word);
   });
-
+  
   /* =========================
      GUESS
   ========================== */

@@ -1,55 +1,37 @@
+// backend/src/engine/wordEngine.js
+
 const WORDS = {
-  // ⭐ Classic = Medium difficulty (normal words)
   Classic: {
-    Part1: [
-      "cat", "dog", "house", "car", "ball", "tree", "sun", "apple",
-      "book", "fish", "hat", "cup", "star", "shoe", "chair", "bed",
-      "cake", "door", "key", "clock"
-    ],
-
-    Part2: [
-      "pencil", "robot", "camera", "shark", "rainbow",
-      "rocket", "candy", "banana", "chef", "crown", "pizza",
-      "soccer", "island", "notebook", "phone", "calendar", "keychain"
-    ],
-
-    Part3: [
-      "kangaroo", "microscope", "zebra", "volcano",
-      "jellyfish", "dragonfly", "dinosaur", "telescope",
-      "helicopter", "submarine", "pyramid", "lighthouse",
-      "hedgehog", "chameleon", "nightmare"
-    ]
+    Part1: ["cat", "dog", "house", "car", "ball"],
+    Part2: ["robot", "camera", "shark", "rainbow"],
+    Part3: ["kangaroo", "volcano", "dinosaur", "helicopter"]
   },
 
-  // ⚡ Quick = EASY words (very simple)
   Quick: {
-    Part1: [
-      "cat", "dog", "sun", "hat", "ball", "pen", "cup", "fish", "tree", "car"
-    ],
-
-    Part2: [
-      "apple", "banana", "pizza", "burger", "school", "chair", "clock", "phone"
-    ],
-
-    Part3: [
-      "running", "jumping", "swimming", "dancing", "singing", "drawing", "reading"
-    ]
+    Part1: ["cat", "sun", "hat", "cup"],
+    Part2: ["apple", "banana", "pizza"],
+    Part3: ["running", "jumping", "swimming"]
   },
 
-  // 🧒 Kids = Kids friendly (fun + simple + safe)
   Kids: {
-    Part1: [
-      "teddy", "panda", "kitten", "puppy", "bunny", "duck", "monkey", "lion"
-    ],
+    Part1: ["teddy", "panda", "kitten"],
+    Part2: ["ice cream", "cupcake", "balloon"],
+    Part3: ["superhero", "princess", "spaceship"]
+  },
 
-    Part2: [
-      "ice cream", "cupcake", "lollipop", "toy car", "balloon",
-      "storybook", "playground", "rainbow"
-    ],
-
-    Part3: [
-      "superhero", "princess", "magic wand", "toy robot",
-      "monster truck", "firetruck", "racecar", "spaceship"
+  // 🔥 Together Mode Word Pool
+  Together: {
+    Drawing: [
+      "giant dragon",
+      "underwater city",
+      "haunted castle",
+      "space battle",
+      "magic forest",
+      "flying car",
+      "robot invasion",
+      "treasure island",
+      "time machine",
+      "superhero team"
     ]
   }
 };
@@ -58,7 +40,12 @@ function getRandomFromArray(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function pickRandomWords(mode) {
+function pickRandomWords(mode, gameplay) {
+  // 🔥 Together Mode → return single word
+  if (mode === "Together" && gameplay === "Drawing") {
+    return getRandomFromArray(WORDS.Together.Drawing);
+  }
+
   const selectedMode = WORDS[mode] || WORDS.Classic;
 
   return [
