@@ -2,8 +2,9 @@
 
 const scheduleRoomCleanup = require("../utils/scheduleRoomCleanup");
 const roundEngine = require("./roundEngine");
-const emitGameState = require("../utils/emitGameState");   // ✅ ADD THIS
-const { pickRandomWords } = require("./wordEngine");     
+const emitGameState = require("../utils/emitGameState");
+const { pickRandomWords } = require("./wordEngine");
+
 /* =========================
    CONSTANTS
 ========================= */
@@ -30,11 +31,17 @@ function startGame(io, room) {
 
     room.status = "playing";
     room.startedAt = Date.now();
-    const words = pickRandomWords("Together");
-    room.currentWord = words;   // only one word
+
+    // ✅ SAFE WORD PICK
+    room.currentWord = pickRandomWords(
+      "Together",
+      "Drawing",
+      room
+    );
+
     room.wordChoices = null;
 
-    emitGameState(io, room); // 🔥 VERY IMPORTANT
+    emitGameState(io, room);
 
     io.to(room.code).emit("TOGETHER_STARTED", {
       leftPlayerId: room.players[0].id,
@@ -78,7 +85,6 @@ function shouldEndGame(room, wasLastDrawer = false) {
   if (!room || room.status !== "playing") return false;
   if (room.mode === "Together") return false;
 
-  /* ===== MAX SCORE RULE ===== */
   if (typeof room.maxScore === "number") {
     const reached = room.players.some(
       p => p.score >= room.maxScore
@@ -86,7 +92,6 @@ function shouldEndGame(room, wasLastDrawer = false) {
     if (reached) return true;
   }
 
-  /* ===== ROUND LIMIT RULE ===== */
   if (
     wasLastDrawer &&
     typeof room.totalRounds === "number" &&
@@ -121,7 +126,6 @@ function endGame(io, room, reason = "completed") {
   room.drawing = [];
   room.undoStack = [];
 
-  /* ===== PREPARE REMATCH ===== */
   room.rematch = {
     active: true,
     votes: new Map(),
@@ -162,12 +166,10 @@ function handleRematchVote(io, room, userId, decision) {
 
   room.rematch.votes.set(userId, decision);
 
-  // Send vote updates
   io.to(room.code).emit("REMATCH_UPDATE", {
     votes: [...room.rematch.votes.entries()],
   });
 
-  // If user chose exit → force exit immediately
   if (decision === "exit") {
     io.to(room.code).emit("FORCE_EXIT");
     return;
@@ -176,7 +178,6 @@ function handleRematchVote(io, room, userId, decision) {
   const playCount = [...room.rematch.votes.values()]
     .filter(v => v === "play").length;
 
-  // ✅ If 2 or more players want to play → start rematch
   if (playCount >= 2) {
     startRematch(io, room);
   }
@@ -204,7 +205,6 @@ function startRematch(io, room) {
     return;
   }
 
-  /* ===== RESET GAME ===== */
   room.status = "playing";
   room.round = 1;
   room.drawerIndex = 0;
@@ -231,5 +231,5 @@ module.exports = {
   shouldEndGame,
   endGame,
   startRematch,
-  handleRematchVote,   // 🔥 IMPORTANT
+  handleRematchVote,
 };
