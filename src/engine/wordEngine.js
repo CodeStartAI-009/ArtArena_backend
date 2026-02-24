@@ -2,22 +2,74 @@
 
 const WORDS = {
   Classic: {
-    Part1: ["cat", "dog", "house", "car", "ball"],
-    Part2: ["robot", "camera", "shark", "rainbow"],
-    Part3: ["kangaroo", "volcano", "dinosaur", "helicopter"]
+    Part1: [
+      "cat", "dog", "house", "car", "ball",
+      "tree", "fish", "chair", "book", "shoe",
+      "star", "cloud", "moon", "phone", "clock"
+    ],
+
+    Part2: [
+      "robot", "camera", "shark", "rainbow",
+      "bicycle", "pirate", "dragon", "castle",
+      "spaceship", "island", "pyramid", "bridge",
+      "airplane", "submarine", "octopus"
+    ],
+
+    Part3: [
+      "kangaroo", "volcano", "dinosaur", "helicopter",
+      "tornado", "time machine", "roller coaster",
+      "skyscraper", "astronaut", "treasure map",
+      "haunted house", "factory", "waterfall",
+      "lightning storm", "battlefield"
+    ]
   },
 
   Quick: {
-    Part1: ["cat", "sun", "hat", "cup"],
-    Part2: ["apple", "banana", "pizza"],
-    Part3: ["running", "jumping", "swimming"]
+    Part1: [
+      "cat", "sun", "hat", "cup",
+      "pen", "leaf", "star", "egg",
+      "sock", "key", "fish", "box"
+    ],
+
+    Part2: [
+      "apple", "banana", "pizza",
+      "guitar", "rocket", "train",
+      "burger", "helmet", "truck",
+      "camera", "flower", "drum"
+    ],
+
+    Part3: [
+      "running", "jumping", "swimming",
+      "dancing", "crying", "laughing",
+      "flying", "climbing", "sleeping",
+      "digging", "painting", "throwing"
+    ]
   },
 
   Kids: {
-    Part1: ["teddy", "panda", "kitten"],
-    Part2: ["ice cream", "cupcake", "balloon"],
-    Part3: ["superhero", "princess", "spaceship"]
+    Part1: [
+      "teddy", "panda", "kitten",
+      "puppy", "duck", "frog",
+      "cookie", "candy", "crayon",
+      "kite", "train", "bunny"
+    ],
+
+    Part2: [
+      "ice cream", "cupcake", "balloon",
+      "playground", "snowman", "rainbow",
+      "dinosaur", "fairy", "monster",
+      "treasure chest", "rocket ship", "magic wand"
+    ],
+
+    Part3: [
+      "superhero", "princess", "spaceship",
+      "dragon rider", "pirate ship",
+      "underwater city", "giant robot",
+      "flying castle", "wizard tower",
+      "jungle adventure", "candy kingdom"
+    ]
   },
+  
 
   Together: {
     Drawing: [
