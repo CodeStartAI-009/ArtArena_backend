@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const { generateGuestName } = require("../services/username.service");
+const generateGuestName = require("../services/username.service");
 
 /* =========================
    TOKEN HELPER
