@@ -9,6 +9,14 @@ function startBotDrawing(io, room) {
 
   if (!room || !room.currentWord) return;
 
+  console.log("🤖 BOT START DRAWING:", room.currentWord);
+
+  /* clear previous bot drawing */
+  if (room.botDrawInterval) {
+    clearInterval(room.botDrawInterval);
+    room.botDrawInterval = null;
+  }
+
   const drawingData = loadQuickDraw(room.currentWord);
 
   if (!drawingData) {
@@ -32,16 +40,10 @@ function startBotDrawing(io, room) {
 
   let index = 0;
 
-  /* clear previous bot drawing if exists */
-  if (room.botDrawInterval) {
-    clearInterval(room.botDrawInterval);
-    room.botDrawInterval = null;
-  }
-
   room.botDrawInterval = setInterval(() => {
 
-    /* STOP DRAWING if turn ended */
-    if (!room || room.turnEnded) {
+    /* stop drawing if game ended */
+    if (!room || room.turnEnded || room.status !== "playing") {
       clearInterval(room.botDrawInterval);
       room.botDrawInterval = null;
       return;
@@ -67,7 +69,6 @@ function startBotDrawing(io, room) {
     index++;
 
   }, intervalTime);
-
 }
 
 /* =========================
@@ -78,7 +79,9 @@ function startBotGuessing(io, room) {
 
   if (!room || !room.currentWord) return;
 
-  const bots = room.players.filter(p => p.isBot);
+  const bots = room.players.filter(
+    p => p.isBot && p.id !== room.drawerId
+  );
 
   if (!bots.length) return;
 
@@ -91,7 +94,13 @@ function startBotGuessing(io, room) {
       if (!room || room.turnEnded) return;
       if (!room.guessingAllowed) return;
 
+      const player = room.players.find(p => p.id === bot.id);
+
+      if (!player || player.guessedCorrectly) return;
+
       const correctChance = Math.random();
+
+      /* WRONG GUESS */
 
       if (correctChance > 0.35) {
 
@@ -110,16 +119,14 @@ function startBotGuessing(io, room) {
         return;
       }
 
-      const player = room.players.find(p => p.id === bot.id);
-
-      if (!player || player.guessedCorrectly) return;
-
-      player.guessedCorrectly = true;
+      /* CORRECT GUESS */
 
       if (!room.correctGuessers)
         room.correctGuessers = new Set();
 
       room.correctGuessers.add(bot.id);
+
+      player.guessedCorrectly = true;
 
       player.score += 15;
 

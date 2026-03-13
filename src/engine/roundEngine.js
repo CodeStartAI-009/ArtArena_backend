@@ -12,7 +12,7 @@ const NO_DRAW_TIMEOUT = 15000;
 const CLASSIC_GUESS_TIME = 30000;
 const DRAW_IDLE_TO_GUESS = 10000;
 const HINT_WINDOW = 10000;
-
+const QUICK_TURN_TIME = 30000; // 30 seconds
 /* =========================
    START ROUND
 ========================= */
@@ -140,14 +140,39 @@ function onWordSelected(io, room, userId, word) {
 
   console.log("✅ WORD SELECTED:", word);
 
+  /* start anti idle timer */
   startNoDrawTimer(io, room);
 
+  /* allow guessing */
   room.guessingAllowed = true;
 
+  /* bots can guess */
   startBotGuessing(io, room);
 
+  /* =========================
+     QUICK MODE TIMER (30s)
+  ========================= */
+
+  if (room.mode === "Quick") {
+
+    room.turnTimer = setTimeout(() => {
+
+      if (!room.turnEnded) {
+        endTurn(io, room);
+      }
+
+    }, 30000);
+
+  }
+
+  /* =========================
+     CLASSIC MODE
+  ========================= */
+
   if (room.mode === "Classic") {
+
     startHintSystem(io, room, CLASSIC_GUESS_TIME);
+
   }
 
   emitGameState(io, room);
@@ -202,23 +227,17 @@ function startNoDrawTimer(io, room) {
 /* =========================
    HUMAN GUESS HANDLER
 ========================= */
-
 function onAnyGuess(io, room, userId, correct) {
 
   if (!room || room.turnEnded) return;
-
   if (!room.guessingAllowed) return;
-
   if (!correct) return;
 
   const player = room.players.find(
     p => String(p.id) === String(userId)
   );
 
-  if (!player) return;
-
-  /* prevent duplicate guess */
-  if (player.guessedCorrectly) return;
+  if (!player || player.guessedCorrectly) return;
 
   player.guessedCorrectly = true;
 
@@ -229,23 +248,22 @@ function onAnyGuess(io, room, userId, correct) {
 
   room.lastGuessAt = Date.now();
 
-  const totalGuessers = room.players.length - 1;
-
-  /* if everyone guessed → end turn */
-  if (room.correctGuessers.size >= totalGuessers) {
-
-    endTurn(io, room);
-
-  }
+  checkTurnEnd(io, room);
 
 }
 /* =========================
    BOT GUESSING
 ========================= */
-
 function startBotGuessing(io, room) {
 
-  const bots = room.players.filter(p => p.isBot);
+  if (!room || !room.currentWord) return;
+
+  if (!room.correctGuessers)
+    room.correctGuessers = new Set();
+
+  const bots = room.players.filter(
+    p => p.isBot && p.id !== room.drawerId
+  );
 
   bots.forEach(bot => {
 
@@ -253,15 +271,33 @@ function startBotGuessing(io, room) {
 
     setTimeout(() => {
 
-      if (room.turnEnded) return;
-      if (!room.currentWord) return;
-      if (bot.guessedCorrectly) return;
+      if (!room || room.turnEnded) return;
+      if (!room.guessingAllowed) return;
 
-      if (Math.random() > 0.35) return;
+      const player = room.players.find(p => p.id === bot.id);
+      if (!player || player.guessedCorrectly) return;
+
+      /* 65% chance wrong guess */
+      if (Math.random() > 0.35) {
+
+        const fakeWords = ["tree","dog","car","sun","boat"];
+
+        const fake =
+          fakeWords[Math.floor(Math.random()*fakeWords.length)];
+
+        io.to(room.code).emit("WRONG_GUESS",{
+          userId: bot.id,
+          guess: fake
+        });
+
+        return;
+      }
+
+      /* correct guess */
 
       const points = scoringEngine.awardScore(room, bot.id);
 
-      bot.guessedCorrectly = true;
+      player.guessedCorrectly = true;
 
       room.correctGuessers.add(bot.id);
 
@@ -270,14 +306,10 @@ function startBotGuessing(io, room) {
         username: bot.username,
         points
       });
-
+      console.log("🤖 Bots guessing:", bots.map(b => b.username));
       emitGameState(io, room);
 
-      const totalGuessers = room.players.length - 1;
-
-      if (room.correctGuessers.size >= totalGuessers) {
-        endTurn(io, room);
-      }
+      checkTurnEnd(io, room);
 
     }, delay);
 
@@ -291,15 +323,37 @@ function startBotGuessing(io, room) {
 
 function onDrawerDraw(io, room) {
 
-  if (!room || room.turnEnded) return;
+  if (!room) return;
+  if (room.turnEnded) return;
 
-  /* mark that the drawer has started drawing */
-  if (!room.hasDrawn) {
-    room.hasDrawn = true;
+  /* already handled */
+  if (room.hasDrawn) return;
+
+  /* mark drawing started */
+  room.hasDrawn = true;
+
+  console.log("✏️ Drawer started drawing:", room.drawerId);
+
+  /* =========================
+     QUICK / KIDS MODE
+     Guess immediately
+  ========================= */
+
+  if (room.mode === "Quick" || room.mode === "Kids") {
+
+    allowGuessing(io, room);
+    return;
+
   }
 
-  /* classic mode delay before guessing */
-  if (room.mode === "Classic" && !room.drawIdleTimer) {
+  /* =========================
+     CLASSIC MODE
+     Delay guessing slightly
+  ========================= */
+
+  if (room.mode === "Classic") {
+
+    if (room.drawIdleTimer) return;
 
     room.drawIdleTimer = setTimeout(() => {
 
@@ -312,27 +366,7 @@ function onDrawerDraw(io, room) {
   }
 
 }
-/* =========================
-   ALLOW GUESSING
-========================= */
-
-function allowGuessing(io, room) {
-
-  if (!room) return;
-  if (room.turnEnded) return;
-  if (room.guessingAllowed) return;
-
-  room.guessingAllowed = true;
-
-  room.lastGuessAt = Date.now();
-
-  io.to(room.code).emit("GUESSING_STARTED");
-
-  startBotGuessing(io, room);
-
-  emitGameState(io, room);
-
-}
+ 
 /* =========================
    HINT SYSTEM
 ========================= */
@@ -418,6 +452,27 @@ function revealHint(io, room) {
    TURN END
 ========================= */
 
+function checkTurnEnd(io, room) {
+
+  if (!room || room.turnEnded) return;
+
+  const totalGuessers = room.players.length - 1;
+
+  const needed = Math.ceil(totalGuessers * 0.8);
+
+  if (room.correctGuessers.size >= needed) {
+
+    console.log(
+      "🟢 Ending turn:",
+      room.correctGuessers.size,
+      "/",
+      totalGuessers
+    );
+
+    endTurn(io, room);
+  }
+
+}
 function endTurn(io, room) {
 
   if (!room || room.turnEnded) return;
@@ -479,7 +534,8 @@ function clearAllRoundTimers(room) {
     "noDrawTimer",
     "drawIdleTimer",
     "hintWindowTimer",
-    "endTimer"
+    "endTimer",
+    "turnTimer"
   ].forEach(t => {
 
     if (room[t]) clearTimeout(room[t]);
