@@ -237,7 +237,12 @@ function onAnyGuess(io, room, userId, correct) {
     p => String(p.id) === String(userId)
   );
 
-  if (!player || player.guessedCorrectly) return;
+  if (!player) return;
+  if (player.guessedCorrectly) return;
+
+  /* =========================
+     MARK CORRECT GUESS
+  ========================= */
 
   player.guessedCorrectly = true;
 
@@ -247,6 +252,34 @@ function onAnyGuess(io, room, userId, correct) {
   room.correctGuessers.add(userId);
 
   room.lastGuessAt = Date.now();
+
+  /* =========================
+     SCORING
+  ========================= */
+
+  const scoringEngine = require("./scoringEngine");
+
+  const points = scoringEngine.awardScore(room, userId);
+
+  /* =========================
+     EMIT RESULT
+  ========================= */
+
+  io.to(room.code).emit("CORRECT_GUESS", {
+    userId: player.id,
+    username: player.username,
+    points
+  });
+
+  console.log(
+    "✅",
+    player.username,
+    "guessed correctly (+", points, ")"
+  );
+
+  /* =========================
+     CHECK TURN END
+  ========================= */
 
   checkTurnEnd(io, room);
 
@@ -353,15 +386,12 @@ function onDrawerDraw(io, room) {
 
   if (room.mode === "Classic") {
 
-    if (room.drawIdleTimer) return;
-
-    room.drawIdleTimer = setTimeout(() => {
-
-      if (!room.turnEnded) {
+     
+     
         allowGuessing(io, room);
-      }
+      
 
-    }, DRAW_IDLE_TO_GUESS);
+     
 
   }
 
@@ -451,25 +481,55 @@ function revealHint(io, room) {
 /* =========================
    TURN END
 ========================= */
-
 function checkTurnEnd(io, room) {
 
   if (!room || room.turnEnded) return;
 
-  const totalGuessers = room.players.length - 1;
+  /* count guessers (exclude drawer) */
+
+  const totalGuessers =
+    room.players.filter(p => p.id !== room.drawerId).length;
+
+  const guessed =
+    room.correctGuessers ? room.correctGuessers.size : 0;
+
+  console.log(
+    "TURN CHECK:",
+    guessed,
+    "/",
+    totalGuessers
+  );
+
+  /* =========================
+     ALL PLAYERS GUESSED
+  ========================= */
+
+  if (guessed >= totalGuessers) {
+
+    console.log("🟢 Everyone guessed correctly");
+
+    endTurn(io, room);
+    return;
+
+  }
+
+  /* =========================
+     80% RULE
+  ========================= */
 
   const needed = Math.ceil(totalGuessers * 0.8);
 
-  if (room.correctGuessers.size >= needed) {
+  if (guessed >= needed) {
 
     console.log(
       "🟢 Ending turn:",
-      room.correctGuessers.size,
+      guessed,
       "/",
       totalGuessers
     );
 
     endTurn(io, room);
+
   }
 
 }
@@ -478,20 +538,57 @@ function endTurn(io, room) {
   if (!room || room.turnEnded) return;
 
   room.turnEnded = true;
+
+  /* stop bot drawing */
+
   if (room.botDrawInterval) {
     clearInterval(room.botDrawInterval);
     room.botDrawInterval = null;
   }
+
   clearAllRoundTimers(room);
 
   io.to(room.code).emit("TURN_END", {
     word: room.currentWord
   });
 
+  const gameEngine = require("./gameEngine");
+
+  /* =========================
+     MAX SCORE WIN CONDITION
+  ========================= */
+
+  if (room.maxScore !== null) {
+
+    const winner = room.players.find(
+      p => p.score >= room.maxScore
+    );
+
+    if (winner) {
+
+      console.log(
+        "🏆 Max score reached:",
+        winner.username,
+        winner.score
+      );
+
+      gameEngine.endGame(io, room, "score_reached");
+      return;
+
+    }
+
+  }
+
+  /* =========================
+     NEXT DRAWER
+  ========================= */
+
   room.drawerIndex =
     (room.drawerIndex + 1) % room.players.length;
 
-  const gameEngine = require("./gameEngine");
+  /* =========================
+     ROUND LIMIT
+  ========================= */
 
   if (room.drawerIndex === 0) {
 
@@ -499,16 +596,19 @@ function endTurn(io, room) {
       typeof room.totalRounds === "number" &&
       room.round >= room.totalRounds
     ) {
+
       gameEngine.endGame(io, room, "rule_reached");
       return;
+
     }
 
     room.round++;
+
   }
 
   startRound(io, room);
-}
 
+}
 /* =========================
    HELPERS
 ========================= */

@@ -1,8 +1,9 @@
- // backend/src/sockets/room.socket.js
+// backend/src/sockets/room.socket.js
 
 const Room = require("../models/Room");
 const User = require("../models/User");
 const scheduleRoomCleanup = require("../utils/scheduleRoomCleanup");
+const generateGuestName = require("../services/username.service");
 
 module.exports = (io, socket, rooms) => {
 
@@ -10,7 +11,9 @@ module.exports = (io, socket, rooms) => {
      LOBBY JOIN
   ========================== */
   socket.on("LOBBY_JOIN", async ({ code }) => {
+
     const userId = socket.data.userId;
+
     if (!code || !userId) {
       console.warn("❌ LOBBY_JOIN blocked", { code, userId });
       return;
@@ -18,16 +21,21 @@ module.exports = (io, socket, rooms) => {
 
     let room = rooms.get(code);
 
-    /* ---------- HYDRATE ROOM FROM DB ---------- */
+    /* =========================
+       HYDRATE ROOM FROM DB
+    ========================== */
+
     if (!room) {
+
       const dbRoom = await Room.findOne({ code }).lean();
+
       if (!dbRoom) {
         console.warn("❌ Room not found in DB:", code);
         return;
       }
 
-      /* ✅ SAFE TIMER NORMALIZATION */
       let timer = null;
+
       if (dbRoom.gameplay === "Timer") {
         const parsed = Number(dbRoom.timer);
         timer = Number.isFinite(parsed) ? parsed : null;
@@ -42,11 +50,11 @@ module.exports = (io, socket, rooms) => {
         maxPlayers: dbRoom.maxPlayers,
         maxScore: dbRoom.maxScore ?? null,
         totalRounds: dbRoom.totalRounds ?? null,
-        timer, // ✅ ALWAYS NUMBER OR NULL
+        timer,
         status: "lobby",
         hostId: null,
         players: [],
-        __rooms: rooms,
+        botFillInterval: null
       };
 
       rooms.set(code, room);
@@ -55,43 +63,50 @@ module.exports = (io, socket, rooms) => {
         code: room.code,
         type: room.type,
         mode: room.mode,
-        gameplay: room.gameplay,
-        timer: room.timer,
-        maxScore: room.maxScore,
-        totalRounds: room.totalRounds,
-        maxPlayers: room.maxPlayers,
+        maxPlayers: room.maxPlayers
       });
     }
 
-    /* ---------- FETCH USER ---------- */
+    /* =========================
+       FETCH USER
+    ========================== */
+
     const dbUser = await User.findById(userId).lean();
+
     if (!dbUser) {
       console.warn("❌ User not found:", userId);
       return;
     }
 
-    /* ---------- MAX PLAYERS CHECK ---------- */
-    const connectedCount = room.players.filter(p => p.connected).length;
+    /* =========================
+       MAX PLAYERS CHECK
+    ========================== */
+
     if (
       room.maxPlayers &&
-      connectedCount >= room.maxPlayers &&
+      room.players.length >= room.maxPlayers &&
       !room.players.some(p => String(p.id) === String(userId))
     ) {
       socket.emit("ROOM_FULL");
       return;
     }
 
-    /* ---------- ADD / RECONNECT PLAYER ---------- */
+    /* =========================
+       ADD / RECONNECT PLAYER
+    ========================== */
+
     let player = room.players.find(
       p => String(p.id) === String(userId)
     );
 
     if (!player) {
+
       player = {
         id: userId,
         username: dbUser.username,
         socketId: socket.id,
         connected: true,
+        isBot: false
       };
 
       room.players.push(player);
@@ -102,32 +117,44 @@ module.exports = (io, socket, rooms) => {
 
       console.log("➕ PLAYER JOINED ROOM", {
         roomCode: room.code,
-        roomType: room.type,
         username: dbUser.username,
-        playersNow: room.players.length,
+        playersNow: room.players.length
       });
+
+      /* start bots only for public rooms */
+      if (room.type === "public") {
+        startLobbyBotFill(io, room);
+      }
+
     } else {
+
       player.socketId = socket.id;
       player.connected = true;
       player.username = dbUser.username;
 
       console.log("🔁 PLAYER RECONNECTED", {
         roomCode: room.code,
-        username: dbUser.username,
+        username: dbUser.username
       });
     }
 
-    /* ---------- JOIN SOCKET ROOM ---------- */
+    /* =========================
+       JOIN SOCKET ROOM
+    ========================== */
+
     socket.join(code);
     socket.data.roomCode = code;
 
     io.to(code).emit("LOBBY_UPDATE", snapshot(room));
   });
 
+
   /* =========================
      DISCONNECT
   ========================== */
+
   socket.on("disconnect", () => {
+
     const code = socket.data.roomCode;
     if (!code) return;
 
@@ -137,14 +164,14 @@ module.exports = (io, socket, rooms) => {
     const player = room.players.find(
       p => p.socketId === socket.id
     );
+
     if (!player) return;
 
     player.connected = false;
 
     console.log("🔴 PLAYER DISCONNECTED", {
       roomCode: room.code,
-      username: player.username,
-      roomType: room.type,
+      username: player.username
     });
 
     io.to(code).emit("LOBBY_UPDATE", snapshot(room));
@@ -154,24 +181,84 @@ module.exports = (io, socket, rooms) => {
       room.players.every(p => !p.connected)
     ) {
       console.log("🧹 Scheduling cleanup for private room", {
-        roomCode: room.code,
+        roomCode: room.code
       });
+
       scheduleRoomCleanup(code, rooms);
     }
+
   });
+
 };
+
+
+/* =========================
+   BOT LOBBY FILL
+========================= */
+
+function startLobbyBotFill(io, room) {
+
+  if (!room) return;
+
+  if (room.botFillInterval) return;
+
+  room.botFillInterval = setInterval(() => {
+
+    if (!room || room.status !== "lobby") {
+      clearInterval(room.botFillInterval);
+      room.botFillInterval = null;
+      return;
+    }
+
+    if (room.maxPlayers && room.players.length >= room.maxPlayers) {
+      clearInterval(room.botFillInterval);
+      room.botFillInterval = null;
+      return;
+    }
+
+    let username;
+
+    do {
+      username = generateGuestName();
+    } while (room.players.some(p => p.username === username));
+
+    const bot = {
+      id: `bot_${Math.random().toString(36).slice(2,8)}`,
+      username,
+      socketId: null,
+      connected: true,
+      isBot: true,
+      score: 0,
+      guessedCorrectly: false
+    };
+
+    room.players.push(bot);
+
+    console.log("🤖 BOT JOINED LOBBY", {
+      roomCode: room.code,
+      username
+    });
+
+    io.to(room.code).emit("LOBBY_UPDATE", snapshot(room));
+
+  }, 10000);
+
+}
+
 
 /* =========================
    SNAPSHOT (CLIENT SAFE)
 ========================= */
+
 function snapshot(room) {
+
   return {
     code: room.code,
     type: room.type,
     mode: room.mode,
     gameplay: room.gameplay,
     theme: room.theme,
-    timer: room.timer, // ✅ number or null
+    timer: room.timer,
     maxPlayers: room.maxPlayers,
     maxScore: room.maxScore ?? null,
     totalRounds: room.totalRounds ?? null,
@@ -181,6 +268,8 @@ function snapshot(room) {
       id: p.id,
       username: p.username,
       connected: p.connected,
-    })),
+      isBot: p.isBot || false
+    }))
   };
+
 }

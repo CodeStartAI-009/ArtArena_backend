@@ -191,7 +191,124 @@ function endGame(io, room, reason = "completed") {
 
   }
 }
+function endGame(io, room, reason = "completed") {
 
+  if (!room || room.status === "ended") return;
+
+  room.status = "ended";
+  room.endedAt = Date.now();
+
+  /* =========================
+     STOP BOT DRAWING
+  ========================= */
+
+  if (room.botDrawInterval) {
+    clearInterval(room.botDrawInterval);
+    room.botDrawInterval = null;
+  }
+
+  /* =========================
+     CLEAR TIMERS
+  ========================= */
+
+  const timers = [
+    "togetherTimer",
+    "wordSelectTimer",
+    "noDrawTimer",
+    "drawIdleTimer",
+    "hintWindowTimer",
+    "endTimer",
+    "turnTimer"
+  ];
+
+  timers.forEach(t => {
+    if (room[t]) clearTimeout(room[t]);
+    room[t] = null;
+  });
+
+  /* =========================
+     SORT PLAYERS BY SCORE
+  ========================= */
+
+  const leaderboard = [...room.players].sort(
+    (a, b) => b.score - a.score
+  );
+
+  const winner = leaderboard.length > 0
+    ? leaderboard[0]
+    : null;
+
+  /* =========================
+     RESET ROUND STATE
+  ========================= */
+
+  room.guessingAllowed = false;
+  room.currentWord = null;
+  room.wordChoices = null;
+
+  room.drawing = [];
+  room.undoStack = [];
+
+  room.turnEnded = true;
+
+  room.correctGuessers = new Set();
+
+  /* =========================
+     REMATCH SYSTEM
+  ========================= */
+
+  room.rematch = {
+    active: true,
+    votes: new Map()
+  };
+
+  /* =========================
+     SEND GAME RESULT
+  ========================= */
+
+  io.to(room.code).emit("GAME_ENDED", {
+
+    reason,
+    type: room.type,
+    mode: room.mode,
+
+    winner: winner
+      ? {
+          id: winner.id,
+          username: winner.username,
+          score: winner.score
+        }
+      : null,
+
+    players: leaderboard.map(p => ({
+      id: p.id,
+      username: p.username,
+      score: p.score,
+      connected: p.connected !== false
+    }))
+
+  });
+
+  /* =========================
+     REMATCH PROMPT
+  ========================= */
+
+  io.to(room.code).emit("REMATCH_PROMPT");
+
+  /* =========================
+     AUTO CLEANUP
+  ========================= */
+
+  const connected =
+    room.players.filter(p => p.connected !== false);
+
+  if (connected.length < 2 && room.type === "private") {
+
+    scheduleRoomCleanup(room.code, room.__rooms);
+
+  }
+
+}
 /* =========================
    HANDLE REMATCH VOTE
 ========================= */
